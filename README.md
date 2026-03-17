@@ -4,6 +4,12 @@
 
 AI-powered prototype builder for Product Managers. Describe your product in natural language, get interactive HTML prototypes.
 
+## Screenshot
+
+Chat with the AI agent (left) and view the generated prototype flow with multi-page navigation (right):
+
+![NexAgent overview](docs/images/screenshot-overview.png)
+
 ## Features
 
 - **Conversational prototyping** — describe your app, get interactive HTML pages
@@ -16,6 +22,7 @@ AI-powered prototype builder for Product Managers. Describe your product in natu
 - **Multi-provider LLM** — Anthropic, OpenAI, or any OpenAI-compatible API
 - **i18n** — Chinese and English UI
 - **Dark/light theme** — auto, dark, or light mode with project-aware theming
+
 
 ## Quick Start
 
@@ -75,6 +82,8 @@ Data is persisted via mounted volumes:
 
 ```
 nexagent/
+├── docs/                 # Documentation & screenshots
+│   └── images/           # Screenshots and images for README/docs
 ├── packages/
 │   ├── core/              # @nexagent/core — Hono API + LLM agent
 │   │   └── src/

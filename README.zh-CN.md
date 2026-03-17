@@ -4,6 +4,13 @@
 
 面向产品经理的 AI 原型构建工具。用自然语言描述产品，即可获得可交互的 HTML 原型。
 
+## 截图
+
+左侧与 AI Agent 对话，右侧查看生成的多页导航原型与流程图：
+
+![NexAgent 概览](docs/images/screenshot-overview.png)
+
+
 ## 功能特性
 
 - **对话式原型** — 描述你的应用，生成可交互的 HTML 页面
@@ -16,6 +23,7 @@
 - **多模型 LLM** — Anthropic、OpenAI 或任意 OpenAI 兼容 API
 - **i18n** — 中英文界面
 - **深色/浅色主题** — 自动、深色或浅色，支持项目级主题
+
 
 ## 快速开始
 
@@ -75,6 +83,8 @@ docker compose up -d
 
 ```
 nexagent/
+├── docs/                 # 文档与截图
+│   └── images/           # README/文档用截图与图片
 ├── packages/
 │   ├── core/              # @nexagent/core — Hono API + LLM agent
 │   │   └── src/
