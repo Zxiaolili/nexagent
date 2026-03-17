@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.next/
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.db-journal
+
+# Runtime data
+.projects/
+nexagent-projects/
+.data/
+
+# Editors
+.idea/
+*.swp
+*.swo
+*~
+.vscode/settings.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Turbo / build cache
+.turbo/
+
+# Debug
+npm-debug.log*
+pnpm-debug.log*

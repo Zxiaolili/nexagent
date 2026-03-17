@@ -1,0 +1,28 @@
+{
+  "name": "nexagent",
+  "private": true,
+  "description": "AI-powered prototype builder for Product Managers",
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "dev:core": "pnpm --filter @nexagent/core run dev",
+    "dev:web": "pnpm --filter @nexagent/web run dev",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "test": "pnpm -r run test",
+    "secret-scan": "node scripts/secret-scan.js",
+    "prepare": "husky"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild",
+      "sharp"
+    ]
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "husky": "^9"
+  }
+}

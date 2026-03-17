@@ -1,0 +1,14 @@
+#!/bin/sh
+echo "> pre-push: 1/2 Running tests..."
+pnpm test || {
+  echo "> pre-push: Tests failed. Push aborted."
+  exit 1
+}
+
+echo "> pre-push: 2/2 Scanning for secrets..."
+pnpm secret-scan || {
+  echo "> pre-push: Secret scan found potential secrets. Push aborted."
+  exit 1
+}
+
+echo "> pre-push: All checks passed."

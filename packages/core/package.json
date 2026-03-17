@@ -1,0 +1,35 @@
+{
+  "name": "@nexagent/core",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup src/index.ts --format esm --dts",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^1",
+    "@ai-sdk/openai": "^1",
+    "@hono/node-server": "^1",
+    "ai": "^4",
+    "archiver": "^7.0.1",
+    "better-sqlite3": "^11",
+    "dotenv": "^17.3.1",
+    "drizzle-orm": "^0.38",
+    "hono": "^4",
+    "nanoid": "^5",
+    "zod": "^3"
+  },
+  "devDependencies": {
+    "@types/archiver": "^7.0.0",
+    "@types/better-sqlite3": "^7",
+    "@types/node": "^22",
+    "tsup": "^8",
+    "tsx": "^4",
+    "typescript": "^5",
+    "vitest": "^2"
+  }
+}
