@@ -1,5 +1,7 @@
 # NexAgent
 
+[中文](README.zh-CN.md)
+
 AI-powered prototype builder for Product Managers. Describe your product in natural language, get interactive HTML prototypes.
 
 ## Features
