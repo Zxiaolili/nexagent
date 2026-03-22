@@ -30,6 +30,7 @@ interface FlowInfo {
   from: string;
   to: string;
   trigger: string;
+  element?: string;
 }
 
 interface PanoramaProps {
@@ -37,10 +38,12 @@ interface PanoramaProps {
   activePageId: string | null;
   onSelectPage: (pageId: string) => void;
   onOpenPage: (pageId: string) => void;
+  /** Bumps when project pages change (SSE); triggers refetch. */
+  refreshKey?: number;
 }
 
-const EDGE_COLOR = { idle: "#cbd5e1", hover: "#475569" };
-const EDGE_LABEL = { idle: "#94a3b8", hover: "#334155" };
+const EDGE_COLOR = { idle: "#94a3b8", hover: "#2563eb" };
+const EDGE_LABEL = { idle: "#64748b", hover: "#1e40af" };
 
 function PageNode({ data, selected }: NodeProps) {
   const nodeData = data as {
@@ -192,39 +195,49 @@ function isAutoFlow(trigger: string): boolean {
 
 const nodeTypes = { pageNode: PageNode };
 
-export function Panorama({ projectId, activePageId, onSelectPage, onOpenPage }: PanoramaProps) {
+export function Panorama({
+  projectId,
+  activePageId,
+  onSelectPage,
+  onOpenPage,
+  refreshKey = 0,
+}: PanoramaProps) {
   const [pages, setPages] = useState<PageInfo[]>([]);
   const [flows, setFlows] = useState<FlowInfo[]>([]);
   const [platform, setPlatform] = useState<string>("mobile");
 
   useEffect(() => {
-    fetchData();
-  }, [projectId]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const [pageList, project] = await Promise.all([
+          api.listPages(projectId),
+          api.getProject(projectId),
+        ]);
 
-  async function fetchData() {
-    try {
-      const [pageList, project] = await Promise.all([
-        api.listPages(projectId),
-        api.getProject(projectId),
-      ]);
-
-      const pagesWithContent = await Promise.all(
-        pageList.map(async (p: any) => {
-          try {
-            const page = await api.getPage(projectId, p.id);
-            return { ...p, content: page.content || "" };
-          } catch {
-            return { ...p, content: "" };
-          }
-        })
-      );
-      setPages(pagesWithContent);
-      setFlows(project.flows || []);
-      setPlatform(project.platform || "mobile");
-    } catch {
-      /* ignore */
-    }
-  }
+        const pagesWithContent = await Promise.all(
+          pageList.map(async (p) => {
+            try {
+              const page = await api.getPage(projectId, p.id);
+              return { ...p, content: page.content || "" };
+            } catch {
+              return { ...p, content: "" };
+            }
+          })
+        );
+        if (!cancelled) {
+          setPages(pagesWithContent);
+          setFlows(project.flows || []);
+          setPlatform(project.platform || "mobile");
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, refreshKey]);
 
   const initialNodes = useMemo(() => {
     const isMobile = platform !== "desktop";
@@ -255,30 +268,34 @@ export function Panorama({ projectId, activePageId, onSelectPage, onOpenPage }: 
   const initialEdges = useMemo(() => {
     return flows.map((nav, i) => {
       const auto = isAutoFlow(nav.trigger);
+      const el = nav.element?.trim();
+      const head = auto ? "⚡ " : "👆 ";
+      const label = el ? `${head}[${el}] · ${nav.trigger}` : `${head}${nav.trigger}`;
+      const edgeKey = `${nav.from}|${nav.to}|${el ?? ""}|${i}`;
       return {
-        id: `nav-${i}`,
+        id: `nav-${edgeKey}`,
         source: nav.from,
         target: nav.to,
-        label: `${auto ? "⚡ " : "👆 "}${nav.trigger}`,
+        label,
         type: "smoothstep",
         animated: false,
         markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLOR.idle },
         style: {
           stroke: EDGE_COLOR.idle,
-          strokeWidth: 1.5,
-          strokeDasharray: auto ? "6 3" : undefined,
+          strokeWidth: 2,
+          strokeDasharray: auto ? "6 4" : undefined,
         },
         labelStyle: {
           fontSize: 11,
-          fontWeight: 500,
+          fontWeight: 600,
           fill: EDGE_LABEL.idle,
         },
         labelBgStyle: {
           fill: "var(--color-surface, #fff)",
-          fillOpacity: 0.9,
+          fillOpacity: 0.95,
         },
-        labelBgPadding: [6, 4] as [number, number],
-        labelBgBorderRadius: 4,
+        labelBgPadding: [8, 6] as [number, number],
+        labelBgBorderRadius: 6,
       };
     });
   }, [flows]);
@@ -308,8 +325,11 @@ export function Panorama({ projectId, activePageId, onSelectPage, onOpenPage }: 
           e.id === edge.id
             ? {
                 ...e,
-                style: { ...e.style, stroke: EDGE_COLOR.hover, strokeWidth: 2.5 },
-                markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLOR.hover },
+                style: { ...e.style, stroke: EDGE_COLOR.hover, strokeWidth: 3 },
+                markerEnd: {
+                  type: MarkerType.ArrowClosed,
+                  color: EDGE_COLOR.hover,
+                },
                 labelStyle: {
                   fontSize: 11,
                   fontWeight: 500,
@@ -331,7 +351,7 @@ export function Panorama({ projectId, activePageId, onSelectPage, onOpenPage }: 
           e.id === edge.id
             ? {
                 ...e,
-                style: { ...e.style, stroke: EDGE_COLOR.idle, strokeWidth: 1.5 },
+                style: { ...e.style, stroke: EDGE_COLOR.idle, strokeWidth: 2 },
                 markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLOR.idle },
                 labelStyle: {
                   fontSize: 11,

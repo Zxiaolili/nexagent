@@ -65,8 +65,9 @@ export async function runAgent(
         | undefined;
 
       if (calls && calls.length > 0) {
-        // Store the assistant message with tool_calls
-        sm.addMessage(sessionId, "assistant", "", {
+        // Prose generated in this step before tool calls (must stay on the same row for LLM history)
+        const stepText = event.text ?? "";
+        sm.addMessage(sessionId, "assistant", stepText, {
           toolCalls: JSON.stringify(calls),
         });
 
@@ -89,24 +90,30 @@ export async function runAgent(
             status: "completed",
           });
         }
-      }
-      if (calls?.length) {
         console.log("[runAgent] onStepFinish tool calls", { sessionId, count: calls.length, names: calls.map((c: any) => c.toolName) });
+        return;
+      }
+
+      const textOnly = (event.text ?? "").trim();
+      if (textOnly) {
+        sm.addMessage(sessionId, "assistant", event.text);
       }
     },
   });
 
-  console.log("[runAgent] consuming textStream", { sessionId });
+  console.log("[runAgent] consuming fullStream", { sessionId });
   let streamAborted = false;
   try {
-    for await (const part of result.textStream) {
+    for await (const part of result.fullStream) {
+      if (part.type !== "text-delta") continue;
       chunkCount++;
-      if (chunkCount <= 3) console.log("[runAgent] text chunk", { sessionId, chunkIndex: chunkCount, part: part.slice(0, 30) });
-      fullText += part;
+      const delta = part.textDelta;
+      if (chunkCount <= 3) console.log("[runAgent] text chunk", { sessionId, chunkIndex: chunkCount, part: delta.slice(0, 30) });
+      fullText += delta;
       bus.emit("session.message", {
         sessionId,
         role: "assistant",
-        content: part,
+        content: delta,
         done: false,
       });
     }
@@ -120,11 +127,7 @@ export async function runAgent(
     }
   }
 
-  console.log("[runAgent] textStream done", { sessionId, chunkCount, fullTextLength: fullText.length, streamAborted });
-
-  if (fullText.trim()) {
-    sm.addMessage(sessionId, "assistant", fullText);
-  }
+  console.log("[runAgent] fullStream done", { sessionId, chunkCount, fullTextLength: fullText.length, streamAborted });
 
   bus.emit("session.message", {
     sessionId,

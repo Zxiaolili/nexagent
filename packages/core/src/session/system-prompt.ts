@@ -47,7 +47,10 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   const flowsInfo =
     manifest.flows.length > 0
       ? manifest.flows
-          .map((f) => `  - ${f.from} → ${f.to} (${f.trigger})`)
+          .map((f) => {
+            const el = f.element ? ` [element: ${f.element}]` : "";
+            return `  - ${f.from} → ${f.to}${el} — ${f.trigger}`;
+          })
           .join("\n")
       : "  (none)";
 
@@ -72,7 +75,7 @@ Every page MUST follow this exact template structure:
 
 \`\`\`html
 <!DOCTYPE html>
-<html lang="zh" data-page="PAGE_ID" data-title="页面名称">
+<html lang="zh" data-page="PAGE_ID" data-title="Page title">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -94,13 +97,17 @@ Every page MUST follow this exact template structure:
 </html>
 \`\`\`
 
+When calling **create_page**, **rewrite_page**, or **edit_page** string arguments: pass **raw HTML only**. Do NOT wrap the HTML in markdown code fences (\`\`\`html … \`\`\`) — those fences are documentation formatting, not part of the file.
+
 Key rules:
 1. Tailwind CSS utility classes ONLY — no inline styles, no <style> blocks (except x-cloak)
 2. Configure the primary color in tailwind.config so you can use \`bg-primary\`, \`text-primary\`, etc.
 3. Alpine.js for ALL interactivity (x-data, x-show, x-for, @click, x-transition, x-cloak)
-4. Navigation between pages: \`<a href="OTHER_PAGE_ID.html">\` using the page id
-5. Use emoji or Unicode symbols as icons (e.g. 🏠 🔍 🛒 ❤️ ⭐ ← → ✕)
-6. Realistic Chinese placeholder content for Chinese apps, English for English apps
+4. **Page ids**: Use **English** page names when calling create_page (e.g. "Home", "Cart") so \`data-page\` and \`href\` match manifest ids and preview never 404s.
+5. **Unique elements (English)**: On every tappable control (links, buttons that navigate, primary CTAs), set \`data-nexagent-element="snake_case_english"\` — unique within that page (e.g. \`nav_home\`, \`btn_checkout\`). Use only \`a-z\`, \`0-9\`, \`_\` after the first letter.
+6. **Cross-page navigation**: Use \`<a href="TARGET_PAGE_ID.html" data-nexagent-element="btn_go_cart">\` where TARGET_PAGE_ID is exactly an existing page id from the manifest. Alternatively \`<button type="button" data-action="navigate" data-target="TARGET_PAGE_ID" data-nexagent-element="btn_next">\`.
+7. Use emoji or Unicode symbols as icons (e.g. 🏠 🔍 🛒 ❤️ ⭐ ← → ✕)
+8. Realistic Chinese placeholder content for Chinese apps, English for English apps
 </html_format>
 
 <visual_quality>
@@ -125,11 +132,10 @@ Do NOT write complex JS logic. Keep all state in x-data as simple objects/arrays
 </interactivity>
 
 <semantic_annotations>
-Mark component boundaries for future code-agent conversion:
-- \`data-component="ComponentName"\` on the component's root element
-- \`data-props="prop1,prop2"\` listing the component's data properties
-- \`data-nav="target-page-id"\` on elements that navigate to another page
-These annotations do not affect rendering but enable code-agents to extract a component tree.
+Optional for code-agent handoff:
+- \`data-component="ComponentName"\` on the component root; \`data-props="prop1,prop2"\` for props
+- \`data-nav="target-page-id"\` is also intercepted for navigation (same ids as \`href\`)
+The required annotation for Agent/UI alignment is \`data-nexagent-element\` on each interactive control (see html_format).
 </semantic_annotations>
 
 <project_context>
@@ -149,9 +155,9 @@ ${componentsInfo ? `\nKnown components:\n${componentsInfo}` : ""}
 <workflow>
 1. **Creating a new page**: Use create_page with the COMPLETE HTML. Always include the full template.
 2. **Modifying a page**: ALWAYS call read_page first, then use edit_page (old_string/new_string) for targeted changes. Use rewrite_page only for wholesale redesigns.
-3. **After creating/modifying**: Call update_flow to record page-to-page navigation relationships.
+3. **After creating/modifying navigation**: Call **update_flow** once per link/button, with **from_page**, **to_page**, **element_id** (same string as \`data-nexagent-element\` on that control), and a short **trigger** label.
 4. **Multiple pages**: When the user describes an app, proactively create multiple pages and connect them with flows. A single-page prototype is rarely useful.
-5. **Communication**: After each tool action, briefly describe what you did and suggest next steps. Use markdown formatting for readability.
+5. **Communication**: After each tool action, briefly describe what you did and suggest next steps. Use markdown formatting for readability. When the user references \`@pageId\` (whole page) or \`@pageId:element_id\` (specific control) in chat, treat it as that page or that exact element on that page.
 6. **Skills**: When the user requests a specific type of app (e.g. ecommerce, social, dashboard), use load_skill to load the corresponding skill for detailed design guidance, then follow the patterns described in it.
 7. **Rules**: If the project has custom design rules, follow them strictly. You can also use update_rules to create or update project-level design conventions.
 </workflow>${buildSkillsSection(skills)}${buildRulesSection(rules)}`;

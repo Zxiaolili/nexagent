@@ -3,7 +3,8 @@
  *
  * | Attribute                | Effect                              |
  * |--------------------------|-------------------------------------|
- * | data-action="navigate"   | Navigate to data-target page        |
+ * | data-action="navigate"   | Navigate to data-target page id     |
+ * | data-nexagent-element    | English id unique per page (Agent @-mentions) |
  * | data-action="back"       | Go back to previous page            |
  * | data-action="toast"      | Show toast with data-message        |
  * | data-action="toggle"     | Toggle data-target element          |

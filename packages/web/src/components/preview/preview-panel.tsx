@@ -98,7 +98,7 @@ export function PreviewPanel({
   }, [navHistory, onNavigate]);
 
   const toolbarClass =
-    "flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface)]";
+    "h-9 shrink-0 flex items-center justify-between gap-2 px-2.5 border-b border-[var(--color-border)] bg-[var(--color-surface)]";
 
   if (!previewSrc) {
     return (
@@ -201,50 +201,50 @@ export function PreviewPanel({
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className={toolbarClass}>
-        <div className="flex items-center gap-1 min-w-0">
+        <div className="flex items-center gap-0.5 min-w-0 min-h-0">
           <button
             type="button"
             onClick={handleBack}
             disabled={navHistory.length === 0}
             className={cn(
-              "p-1.5 rounded transition-colors shrink-0",
+              "p-1 rounded transition-colors shrink-0",
               navHistory.length > 0
                 ? "text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
                 : "text-[var(--color-border)] cursor-not-allowed"
             )}
             title={t("chat.back")}
           >
-            <ArrowLeft size={16} />
+            <ArrowLeft size={15} />
           </button>
-          <div className="w-px h-4 bg-[var(--color-border)] mx-1 shrink-0" />
+          <div className="w-px h-3.5 bg-[var(--color-border)] mx-0.5 shrink-0" />
           <button
             type="button"
             onClick={() => setDevice("mobile")}
             className={cn(
-              "p-1.5 rounded transition-colors shrink-0",
+              "p-1 rounded transition-colors shrink-0",
               device === "mobile"
                 ? "bg-[var(--color-accent)] text-white"
                 : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
             )}
             title="Mobile"
           >
-            <Smartphone size={16} />
+            <Smartphone size={15} />
           </button>
           <button
             type="button"
             onClick={() => setDevice("desktop")}
             className={cn(
-              "p-1.5 rounded transition-colors shrink-0",
+              "p-1 rounded transition-colors shrink-0",
               device === "desktop"
                 ? "bg-[var(--color-accent)] text-white"
                 : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
             )}
             title="Desktop"
           >
-            <Monitor size={16} />
+            <Monitor size={15} />
           </button>
-          <div className="w-px h-4 bg-[var(--color-border)] mx-1.5 shrink-0" />
-          <label className="flex items-center gap-2 min-w-0 max-w-[140px] sm:max-w-[200px]">
+          <div className="w-px h-3.5 bg-[var(--color-border)] mx-0.5 shrink-0" />
+          <label className="flex items-center gap-1.5 min-w-0 max-w-[120px] sm:max-w-[180px]">
             <span className="text-[10px] text-[var(--color-text-secondary)] whitespace-nowrap shrink-0">
               {t("preview.displayScale")}
             </span>
@@ -260,11 +260,11 @@ export function PreviewPanel({
           </label>
         </div>
 
-        <span className="text-xs text-[var(--color-text-secondary)] font-mono truncate mx-2">
+        <span className="text-[11px] text-[var(--color-text-secondary)] font-mono truncate mx-1 min-w-0">
           {pageId}
         </span>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-0.5 shrink-0">
           <button
             type="button"
             onClick={() => {
@@ -272,15 +272,15 @@ export function PreviewPanel({
                 iframeRef.current.src = iframeRef.current.src;
               }
             }}
-            className="p-1.5 rounded text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors"
+            className="p-1 rounded text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors"
             title={t("chat.refresh")}
           >
-            <RefreshCw size={16} />
+            <RefreshCw size={15} />
           </button>
           {trailingToolbar ? (
             <>
-              <div className="w-px h-4 bg-[var(--color-border)] mx-0.5 shrink-0" />
-              <div className="flex items-center gap-0.5 shrink-0">{trailingToolbar}</div>
+              <div className="w-px h-3.5 bg-[var(--color-border)] mx-0.5 shrink-0" />
+              <div className="flex h-full items-center gap-0.5 shrink-0">{trailingToolbar}</div>
             </>
           ) : null}
         </div>
@@ -291,14 +291,14 @@ export function PreviewPanel({
       </div>
 
       {pages.length > 1 && (
-        <div className="flex items-center gap-1 px-3 py-2 border-t border-[var(--color-border)] bg-[var(--color-surface)] overflow-x-auto shrink-0">
+        <div className="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-t border-[var(--color-border)] bg-[var(--color-surface)] px-2.5">
           {pages.map((p) => (
             <button
               key={p.id}
               type="button"
               onClick={() => onNavigate?.(p.id)}
               className={cn(
-                "px-3 py-1.5 rounded-md text-xs whitespace-nowrap transition-colors",
+                "rounded-md px-2 py-1 text-[11px] whitespace-nowrap transition-colors",
                 p.id === pageId
                   ? "bg-[var(--color-accent)] text-white"
                   : "bg-[var(--color-surface-2)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]"

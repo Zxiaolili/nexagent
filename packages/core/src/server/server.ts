@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { bus } from "../bus/index.js";
-import { ProjectManager } from "../project/manager.js";
+import { ProjectManager, slugifyPageName } from "../project/manager.js";
 import { SessionManager } from "../session/index.js";
 import { runAgent } from "../session/runner.js";
 import { getDb } from "../storage/db.js";
@@ -29,6 +29,84 @@ interface ApiError {
 
 function apiError(message: string, code: string, status: number, c: any) {
   return c.json({ error: message, code } satisfies ApiError, status);
+}
+
+const NEXAGENT_ELEMENT_RE =
+  /data-nexagent-element\s*=\s*["']([a-zA-Z][a-zA-Z0-9_-]*)["']/gi;
+
+function extractNexagentElements(html: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of html.matchAll(NEXAGENT_ELEMENT_RE)) {
+    const id = m[1];
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
+
+function buildPreviewNavScript(manifest: {
+  pages: { id: string; name: string }[];
+}): string {
+  const ids = manifest.pages.map((p) => p.id);
+  const nameSlugToId: Record<string, string> = {};
+  for (const p of manifest.pages) {
+    nameSlugToId[slugifyPageName(p.name)] = p.id;
+  }
+  const idsJson = JSON.stringify(ids);
+  const slugJson = JSON.stringify(nameSlugToId);
+  return `<script>
+(function(){
+var IDS=${idsJson};
+var LOWER={};
+IDS.forEach(function(id){LOWER[String(id).toLowerCase()]=id;});
+var NAME_SLUG=${slugJson};
+function slug(s){
+return String(s).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g,'-').replace(/^-|-$/g,'');
+}
+function resolveTarget(raw){
+if(raw==null||raw==='')return null;
+var href=String(raw).trim();
+try{href=decodeURIComponent(href);}catch(e){}
+href=href.split('#')[0].split('?')[0];
+var seg=href.replace(/^.*\\//,'').replace(/^\\.\\//,'');
+if(!seg)return null;
+var base=seg.replace(/\\.html$/i,'');
+if(IDS.indexOf(base)>=0)return base;
+var lo=LOWER[base.toLowerCase()];
+if(lo)return lo;
+var sl=slug(base);
+if(NAME_SLUG[sl])return NAME_SLUG[sl];
+if(NAME_SLUG[slug(seg)])return NAME_SLUG[slug(seg)];
+return null;
+}
+function postNav(target){
+var id=resolveTarget(target);
+if(!id){console.warn('[NexAgent] Unknown navigation target:',target);return;}
+window.parent.postMessage({type:'nexagent:navigate',pageId:id},'*');
+}
+document.addEventListener('click',function(e){
+var n=e.target.closest('[data-action="navigate"]');
+if(n){
+var t=n.getAttribute('data-target');
+if(t){e.preventDefault();e.stopPropagation();postNav(t);return;}
+}
+n=e.target.closest('[data-nav]');
+if(n){
+var dn=n.getAttribute('data-nav');
+if(dn){e.preventDefault();e.stopPropagation();postNav(dn);return;}
+}
+var a=e.target.closest('a[href]');
+if(!a)return;
+var href=a.getAttribute('href');
+if(!href||/^https?:|^#|^javascript/i.test(href))return;
+e.preventDefault();
+postNav(href);
+},true);
+})();
+</script>`;
 }
 
 export function createServer(config: ServerConfig) {
@@ -115,6 +193,34 @@ export function createServer(config: ServerConfig) {
     }
   });
 
+  app.get("/api/projects/:projectId/page-elements", async (c) => {
+    const projectId = c.req.param("projectId");
+    try {
+      const manifest = await pm.getManifest(projectId);
+      const rows: { pageId: string; pageName: string; elements: string[] }[] = [];
+      for (const p of manifest.pages) {
+        try {
+          const html = await pm.readPage(projectId, p.id);
+          rows.push({
+            pageId: p.id,
+            pageName: p.name,
+            elements: extractNexagentElements(html),
+          });
+        } catch {
+          rows.push({ pageId: p.id, pageName: p.name, elements: [] });
+        }
+      }
+      return c.json(rows);
+    } catch (err: unknown) {
+      return apiError(
+        (err as Error).message || "Failed to list page elements",
+        "LIST_PAGE_ELEMENTS_ERROR",
+        500,
+        c
+      );
+    }
+  });
+
   // ─── Files ───
   app.get("/api/projects/:projectId/files", async (c) => {
     try {
@@ -131,19 +237,8 @@ export function createServer(config: ServerConfig) {
     const { projectId, pageId } = c.req.param();
     try {
       let content = await pm.readPage(projectId, pageId);
-      // Inject script that intercepts <a href="xxx.html"> clicks and
-      // posts a message to the parent window so the preview panel can navigate.
-      const navScript = `<script>
-document.addEventListener('click', function(e) {
-  var a = e.target.closest('a[href]');
-  if (!a) return;
-  var href = a.getAttribute('href');
-  if (!href || href.startsWith('http') || href.startsWith('#') || href.startsWith('javascript')) return;
-  e.preventDefault();
-  var pageId = href.replace(/\\.html$/, '');
-  window.parent.postMessage({ type: 'nexagent:navigate', pageId: pageId }, '*');
-});
-</script>`;
+      const manifest = await pm.getManifest(projectId);
+      const navScript = buildPreviewNavScript(manifest);
       content = content.replace("</body>", navScript + "\n</body>");
       return c.html(content);
     } catch {

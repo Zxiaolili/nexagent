@@ -8,6 +8,8 @@ export interface FlowDef {
   from: string;
   to: string;
   trigger: string;
+  /** Matches \`data-nexagent-element\` on the source page when set. */
+  element?: string;
 }
 
 interface FlowGraphProps {
@@ -126,8 +128,12 @@ export function FlowGraph({
                 >
                   {toPage?.name || edge.to}
                 </button>
-                <span className="text-[10px] text-[var(--color-text-secondary)] ml-auto truncate max-w-[100px]">
-                  {edge.trigger}
+                <span className="text-[10px] text-[var(--color-text-secondary)] ml-auto truncate max-w-[140px] text-right">
+                  {edge.element ? (
+                    <span className="font-mono text-[var(--color-accent)]">[{edge.element}]</span>
+                  ) : null}
+                  {edge.element ? " " : null}
+                  <span className="opacity-80">{edge.trigger}</span>
                 </span>
               </div>
             );

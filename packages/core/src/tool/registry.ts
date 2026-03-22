@@ -22,7 +22,11 @@ export function buildTools(ctx: ToolsContext): Record<string, CoreTool> {
       description:
         "Create a new prototype page. Generates a complete HTML file with Tailwind CSS and Alpine.js for interactivity. The page content should be a full HTML document.",
       parameters: z.object({
-        name: z.string().describe("Human-readable page name, e.g. '首页', 'Product List'"),
+        name: z
+          .string()
+          .describe(
+            "Page title shown in UI. Prefer English (e.g. Home, Product Detail) so the page id slug matches hrefs and avoids broken preview links."
+          ),
         content: z.string().describe("Full HTML content of the page"),
         description: z
           .string()
@@ -121,23 +125,43 @@ export function buildTools(ctx: ToolsContext): Record<string, CoreTool> {
 
     update_flow: {
       description:
-        "Add or update a navigation flow between two pages. This records how users navigate between pages.",
+        "Record one navigation edge from a specific element on the source page to the target page. Match the element_id to data-nexagent-element on that page. Call once per distinct button/link.",
       parameters: z.object({
         from_page: z.string().describe("Source page id"),
         to_page: z.string().describe("Target page id"),
+        element_id: z
+          .string()
+          .optional()
+          .describe(
+            "English id from data-nexagent-element on the source page (e.g. nav_cart). Omit only for non-click flows (e.g. auto redirect)."
+          ),
         trigger: z
           .string()
-          .describe("What user action triggers this navigation, e.g. '点击商品卡片'"),
+          .describe("Short human label, e.g. 'Tap cart icon' / '点击结算'"),
       }),
-      execute: async ({ from_page, to_page, trigger }) => {
+      execute: async ({ from_page, to_page, element_id, trigger }) => {
+        const el = element_id?.trim() ?? "";
         await pm.updateManifest(projectId, (m) => {
           m.flows = m.flows.filter(
-            (f) => !(f.from === from_page && f.to === to_page)
+            (f) =>
+              !(
+                f.from === from_page &&
+                f.to === to_page &&
+                (f.element ?? "") === el
+              )
           );
-          m.flows.push({ from: from_page, to: to_page, trigger });
+          const row: {
+            from: string;
+            to: string;
+            trigger: string;
+            element?: string;
+          } = { from: from_page, to: to_page, trigger };
+          if (el) row.element = el;
+          m.flows.push(row);
           return m;
         });
-        return `Flow added: ${from_page} → ${to_page} (trigger: ${trigger})`;
+        const tag = el ? `[${el}] ` : "";
+        return `Flow added: ${from_page} ${tag}→ ${to_page} (${trigger})`;
       },
     },
 

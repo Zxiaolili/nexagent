@@ -38,6 +38,28 @@ export interface ComponentDef {
   description: string;
 }
 
+/** Strip markdown fences models sometimes paste into tool `content` (e.g. ```html ... ```). */
+/** Same slug algorithm as page file ids derived from `createPage(name, ...)`. */
+export function slugifyPageName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function normalizeStoredPageHtml(content: string): string {
+  let s = content.replace(/^\uFEFF/, "").trim();
+  for (let i = 0; i < 3; i++) {
+    const next = s
+      .replace(/^\s*```[a-zA-Z0-9_-]*\s*\r?\n?/, "")
+      .replace(/\s*```\s*$/, "")
+      .trim();
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
 function defaultManifest(name: string): ProjectManifest {
   return {
     name,
@@ -132,13 +154,10 @@ export class ProjectManager {
     content: string,
     description = ""
   ): Promise<string> {
-    const pageId = name
-      .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
-      .replace(/^-|-$/g, "");
+    const pageId = slugifyPageName(name);
     const fileName = `${pageId}.html`;
     const filePath = path.join(this.pagesDir(projectId), fileName);
-    await fs.writeFile(filePath, content, "utf-8");
+    await fs.writeFile(filePath, normalizeStoredPageHtml(content), "utf-8");
 
     await this.updateManifest(projectId, (m) => {
       if (!m.pages.find((p) => p.id === pageId)) {
@@ -168,7 +187,7 @@ export class ProjectManager {
     content: string
   ): Promise<void> {
     const filePath = path.join(this.pagesDir(projectId), `${pageId}.html`);
-    await fs.writeFile(filePath, content, "utf-8");
+    await fs.writeFile(filePath, normalizeStoredPageHtml(content), "utf-8");
     bus.emit("page.updated", { projectId, pageId });
   }
 

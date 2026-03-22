@@ -19,6 +19,7 @@ if (existsSync(rootEnvPath)) {
 }
 
 const nextConfig: NextConfig = {
+  devIndicators: false,
   async rewrites() {
     const coreUrl = process.env.NEXT_PUBLIC_CORE_URL || "http://localhost:3457";
     return {

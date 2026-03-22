@@ -52,8 +52,13 @@ export const api = {
     ),
 
   getFlows: (projectId: string) =>
-    request<any>(`/api/projects/${projectId}`).then(
-      (p: any) => (p.flows || []) as { from: string; to: string; trigger: string }[]
+    request<{ flows?: { from: string; to: string; trigger: string; element?: string }[] }>(
+      `/api/projects/${projectId}`
+    ).then((p) => p.flows ?? []),
+
+  listPageElements: (projectId: string) =>
+    request<{ pageId: string; pageName: string; elements: string[] }[]>(
+      `/api/projects/${projectId}/page-elements`
     ),
 
   previewUrl: (projectId: string, pageId: string) =>

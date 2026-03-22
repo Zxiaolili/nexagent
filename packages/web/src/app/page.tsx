@@ -8,8 +8,13 @@ import { PreviewPanel } from "@/components/preview/preview-panel";
 import {
   ChatPanel,
   type ChatMessage,
+  type ChatMentionOption,
   type ToolCallInfo,
 } from "@/components/chat/chat-panel";
+import {
+  sessionRowsToChatMessages,
+  type SessionApiMessageRow,
+} from "@/lib/session-messages";
 import { useEventSource, useChatStream } from "@/hooks/use-event-source";
 import { NewProjectDialog } from "@/components/editor/new-project-dialog";
 import { useProjectTheme, type ProjectTheme, type ColorSchemeOverride } from "@/hooks/use-project-theme";
@@ -106,9 +111,11 @@ export default function Home() {
   const sidebarTopPaneRef = useRef<HTMLDivElement>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [chatMentions, setChatMentions] = useState<ChatMentionOption[]>([]);
   const [showNewProject, setShowNewProject] = useState(false);
+  const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
+  const projectSwitcherRef = useRef<HTMLDivElement>(null);
 
   const { send, cancel } = useChatStream();
 
@@ -175,6 +182,47 @@ export default function Home() {
     }).catch(console.error);
   }, [projectId, refreshProject]);
 
+  useEffect(() => {
+    if (!projectId) {
+      setChatMentions([]);
+      return;
+    }
+    let cancelled = false;
+    const pageOpts: ChatMentionOption[] = [...pages]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((p) => ({
+        insert: `@${p.id}`,
+        label: p.name,
+        detail: p.id,
+        kind: "page" as const,
+      }));
+
+    api
+      .listPageElements(projectId)
+      .then((rows) => {
+        if (cancelled) return;
+        const elOpts: ChatMentionOption[] = [];
+        for (const row of rows) {
+          for (const el of row.elements) {
+            elOpts.push({
+              insert: `@${row.pageId}:${el}`,
+              label: el,
+              detail: `${row.pageName} · ${row.pageId}`,
+              kind: "element",
+            });
+          }
+        }
+        elOpts.sort((a, b) => a.detail.localeCompare(b.detail));
+        setChatMentions([...pageOpts, ...elOpts]);
+      })
+      .catch(() => {
+        if (!cancelled) setChatMentions(pageOpts);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, previewRefresh, pages]);
+
   // SSE: listen for real-time updates (including streaming chat deltas)
   useEventSource(
     useCallback(
@@ -193,6 +241,7 @@ export default function Home() {
 
         if (event === "page.deleted" && data.projectId === projectId) {
           refreshProject(projectId);
+          setPreviewRefresh((n) => n + 1);
           if (activePageId === data.pageId) setActivePageId(null);
         }
 
@@ -222,9 +271,10 @@ export default function Home() {
               const updated = [...prev];
               const last = updated[updated.length - 1];
               if (last?.role === "assistant") {
+                const hasBlocks = (last.blocks?.length ?? 0) > 0;
                 updated[updated.length - 1] = {
                   ...last,
-                  content: data.content || last.content,
+                  content: hasBlocks ? last.content : data.content || last.content,
                   isStreaming: false,
                 };
               }
@@ -252,22 +302,33 @@ export default function Home() {
         }
 
         if (event === "session.tool_call" && data.sessionId === sessionId) {
-          setToolCalls((prev) => {
-            const existing = prev.findIndex(
-              (t) => t.toolName === data.toolName && t.status === "running"
-            );
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role !== "assistant" || last.isError) return prev;
+
             const entry: ToolCallInfo = {
               toolName: data.toolName,
               status: data.status,
               args: data.args,
               result: data.result,
             };
-            if (existing >= 0) {
-              const updated = [...prev];
-              updated[existing] = entry;
-              return updated;
+
+            const nextBlocks = [...(last.blocks ?? [])];
+            let nextContent = last.content;
+
+            if (nextContent) {
+              nextBlocks.push({ type: "text", text: nextContent });
+              nextContent = "";
             }
-            return [...prev, entry];
+            nextBlocks.push({ type: "tool", tool: entry });
+
+            updated[updated.length - 1] = {
+              ...last,
+              blocks: nextBlocks,
+              content: nextContent,
+            };
+            return updated;
           });
         }
       },
@@ -285,7 +346,6 @@ export default function Home() {
     setSessionId(session.id);
     setSessions([{ id: session.id, title: session.title || "New Chat", createdAt: session.createdAt, updatedAt: session.updatedAt }]);
     setMessages([]);
-    setToolCalls([]);
     setPages([]);
     setFlows([]);
     setProjectFiles([]);
@@ -294,23 +354,36 @@ export default function Home() {
 
   const loadSessionMessages = async (sid: string) => {
     const msgs = await api.getMessages(sid);
-    setMessages(
-      msgs
-        .filter((m: any) => m.role === "user" || (m.role === "assistant" && m.content))
-        .map((m: any) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-        }))
-    );
-    setToolCalls([]);
+    setMessages(sessionRowsToChatMessages(msgs as SessionApiMessageRow[]));
   };
 
+  useEffect(() => {
+    if (!projectSwitcherOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      const el = projectSwitcherRef.current;
+      if (el && !el.contains(e.target as Node)) setProjectSwitcherOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setProjectSwitcherOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [projectSwitcherOpen]);
+
+  useEffect(() => {
+    if (!projectSwitcherOpen || !projectId) return;
+    api.listProjects().then(setProjects).catch(console.error);
+  }, [projectSwitcherOpen, projectId]);
+
   const handleSelectProject = async (id: string) => {
+    setProjectSwitcherOpen(false);
     setProjectId(id);
     setActivePageId(null);
     setMessages([]);
-    setToolCalls([]);
     const sessionList = await api.listSessions(id);
     const mapped = sessionList.map((s: any) => ({ id: s.id, title: s.title || "Chat", createdAt: s.createdAt, updatedAt: s.updatedAt }));
     setSessions(mapped);
@@ -328,7 +401,6 @@ export default function Home() {
     if (sid === sessionId) return;
     setSessionId(sid);
     setMessages([]);
-    setToolCalls([]);
     await loadSessionMessages(sid);
   };
 
@@ -340,7 +412,6 @@ export default function Home() {
     setSessions((prev) => [entry, ...prev]);
     setSessionId(session.id);
     setMessages([]);
-    setToolCalls([]);
   };
 
   const [shareCopied, setShareCopied] = useState(false);
@@ -384,7 +455,6 @@ export default function Home() {
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setIsLoading(true);
-    setToolCalls([]);
 
     if (messages.length === 0) {
       const previewTitle = message.slice(0, 50);
@@ -434,67 +504,84 @@ export default function Home() {
   // ─── Project selection ───
   if (!projectId) {
     return (
-      <div className="h-screen flex items-center justify-center">
-        <div className="max-w-md w-full px-6">
-          <div className="flex justify-end gap-2 mb-4">
+      <div className="h-screen flex flex-col bg-[var(--color-bg)]">
+        <header className="h-12 flex items-center justify-between px-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <NextLogo className="h-7 w-7 shrink-0 text-[var(--color-accent)]" />
+            <span className="text-sm font-semibold truncate">{t("app.title")}</span>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
             <button
+              type="button"
               onClick={cycleColorScheme}
               className="p-1.5 rounded text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
               title={colorScheme === "dark" ? t("theme.light") : colorScheme === "light" ? t("theme.dark") : t("theme.auto")}
             >
-              {colorScheme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+              {colorScheme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
             </button>
             <button
+              type="button"
               onClick={() => setLocale("zh")}
-              className={cn("px-2 py-1 rounded text-xs", locale === "zh" ? "bg-[var(--color-accent)] text-white" : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)]")}
+              className={cn(
+                "px-2 py-1 rounded text-xs",
+                locale === "zh" ? "bg-[var(--color-accent)] text-white" : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
+              )}
             >
               中文
             </button>
             <button
+              type="button"
               onClick={() => setLocale("en")}
-              className={cn("px-2 py-1 rounded text-xs", locale === "en" ? "bg-[var(--color-accent)] text-white" : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)]")}
+              className={cn(
+                "px-2 py-1 rounded text-xs",
+                locale === "en" ? "bg-[var(--color-accent)] text-white" : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
+              )}
             >
               EN
             </button>
           </div>
-          <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold mb-2 tracking-tight">{t("app.title")}</h1>
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              {t("app.tagline")}
-            </p>
+        </header>
+        <div className="flex-1 flex items-center justify-center overflow-auto">
+          <div className="max-w-md w-full px-6 py-10">
+            <p className="text-sm text-[var(--color-text-secondary)] mb-6">{t("app.tagline")}</p>
+
+            {projects.length > 0 && (
+              <div className="mb-6">
+                <p className="text-xs text-[var(--color-text-secondary)] uppercase tracking-wider font-semibold mb-2">
+                  {t("app.recentProjects")}
+                </p>
+                <ul className="border border-[var(--color-border)] rounded-lg overflow-hidden bg-[var(--color-surface)] divide-y divide-[var(--color-border)]">
+                  {projects.map((p) => (
+                    <li key={p.id}>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectProject(p.id)}
+                        className="w-full flex items-center gap-3 px-3 py-2.5 text-left text-sm hover:bg-[var(--color-surface-2)] transition-colors"
+                      >
+                        <FolderOpen size={16} className="text-[var(--color-text-secondary)] shrink-0" />
+                        <span className="truncate">{p.name}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowNewProject(true)}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)] transition-colors text-sm font-medium"
+            >
+              <Plus size={16} />
+              {t("app.newProject")}
+            </button>
+
+            <NewProjectDialog
+              open={showNewProject}
+              onClose={() => setShowNewProject(false)}
+              onCreate={(name) => handleCreateProject(name)}
+            />
           </div>
-
-          {projects.length > 0 && (
-            <div className="space-y-2 mb-6">
-              <p className="text-xs text-[var(--color-text-secondary)] uppercase tracking-wider font-semibold px-1">
-                {t("app.recentProjects")}
-              </p>
-              {projects.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => handleSelectProject(p.id)}
-                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] transition-colors text-left group"
-                >
-                  <FolderOpen size={18} className="text-[var(--color-text-secondary)] group-hover:text-[var(--color-accent)] transition-colors" />
-                  <span className="text-sm">{p.name}</span>
-                </button>
-              ))}
-            </div>
-          )}
-
-          <button
-            onClick={() => setShowNewProject(true)}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)] transition-colors text-sm font-medium"
-          >
-            <Plus size={16} />
-            {t("app.newProject")}
-          </button>
-
-          <NewProjectDialog
-            open={showNewProject}
-            onClose={() => setShowNewProject(false)}
-            onCreate={(name) => handleCreateProject(name)}
-          />
         </div>
       </div>
     );
@@ -511,26 +598,26 @@ export default function Home() {
         type="button"
         onClick={() => setCanvasMode("experience")}
         className={cn(
-          "flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors",
+          "flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors",
           canvasMode === "experience"
             ? "bg-[var(--color-accent)] text-white"
             : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]"
         )}
       >
-        <Play size={12} />
+        <Play size={11} />
         {t("workspace.experience")}
       </button>
       <button
         type="button"
         onClick={() => setCanvasMode("panorama")}
         className={cn(
-          "flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors",
+          "flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors",
           canvasMode === "panorama"
             ? "bg-[var(--color-accent)] text-white"
             : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]"
         )}
       >
-        <Map size={12} />
+        <Map size={11} />
         {t("workspace.panorama")}
       </button>
     </>
@@ -539,31 +626,93 @@ export default function Home() {
   return (
     <div className="h-screen flex flex-col bg-[var(--color-bg)]">
       {/* Top bar */}
-      <header className="h-12 flex items-center justify-between px-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] shrink-0">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              setProjectId(null);
-              setSessionId(null);
-              setMessages([]);
-              setPages([]);
-              setFlows([]);
-              setProjectFiles([]);
-              setProjectTheme(null);
-              setCanvasMode("experience");
-            }}
-            className="text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors"
-          >
-            ← {t("app.projects")}
-          </button>
-          <div className="w-px h-4 bg-[var(--color-border)]" />
-          <h1 className="text-sm font-semibold">{projectName}</h1>
-          <span className="text-xs text-[var(--color-text-secondary)]">
-            {pages.length} {t("app.pages").toLowerCase()}
-          </span>
+      <header className="h-12 flex items-center justify-between px-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] shrink-0 gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex shrink-0 items-center gap-2">
+            <NextLogo className="h-7 w-7 shrink-0 text-[var(--color-accent)]" aria-hidden />
+            <span className="text-sm font-semibold shrink-0">{t("app.title")}</span>
+          </div>
+          <div className="h-4 w-px shrink-0 bg-[var(--color-border)]" />
+          <div className="relative" ref={projectSwitcherRef}>
+            <button
+              type="button"
+              onClick={() => setProjectSwitcherOpen((o) => !o)}
+              className="inline-flex min-w-0 max-w-[min(26rem,calc(100vw-11rem))] items-center gap-2 rounded-md px-2 py-1 -mx-2 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+              aria-expanded={projectSwitcherOpen}
+              aria-haspopup="listbox"
+              title={projectName}
+            >
+              <span className="min-w-0 truncate text-sm font-semibold">{projectName}</span>
+              <span className="text-xs text-[var(--color-text-secondary)] shrink-0">
+                {pages.length} {t("app.pages").toLowerCase()}
+              </span>
+              <ChevronDown
+                size={16}
+                className={cn(
+                  "shrink-0 text-[var(--color-text-secondary)] transition-transform",
+                  projectSwitcherOpen && "rotate-180"
+                )}
+              />
+            </button>
+            {projectSwitcherOpen && (
+              <div
+                className="absolute left-0 top-full z-50 mt-1 min-w-[min(100vw-2rem,280px)] max-w-[min(100vw-2rem,320px)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-lg"
+                role="listbox"
+              >
+                {[...projects]
+                  .sort((a, b) =>
+                    a.name.localeCompare(b.name, locale === "zh" ? "zh-Hans-CN" : "en", {
+                      sensitivity: "base",
+                      numeric: true,
+                    })
+                  )
+                  .map((p) => {
+                    const isCurrent = p.id === projectId;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        role="option"
+                        aria-selected={isCurrent}
+                        onClick={() => {
+                          if (isCurrent) {
+                            setProjectSwitcherOpen(false);
+                            return;
+                          }
+                          void handleSelectProject(p.id);
+                        }}
+                        className={cn(
+                          "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-2)]",
+                          isCurrent && "bg-[var(--color-surface-2)]/80"
+                        )}
+                      >
+                        {isCurrent ? (
+                          <Check size={16} className="shrink-0 text-[var(--color-accent)]" aria-hidden />
+                        ) : (
+                          <FolderOpen size={16} className="shrink-0 text-[var(--color-text-secondary)]" aria-hidden />
+                        )}
+                        <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                      </button>
+                    );
+                  })}
+                <div className="my-1 h-px bg-[var(--color-border)]" />
+                <button
+                  type="button"
+                  role="option"
+                  onClick={() => {
+                    setProjectSwitcherOpen(false);
+                    setShowNewProject(true);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
+                >
+                  <Plus size={16} className="shrink-0" />
+                  {t("app.newProject")}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+        <div className="flex shrink-0 items-center gap-2 text-xs text-[var(--color-text-secondary)]">
           {isLoading && (
             <span className="flex items-center gap-1.5 text-[var(--color-accent)]">
               <Loader2 size={12} className="animate-spin" />
@@ -592,15 +741,17 @@ export default function Home() {
       {/* Main workspace: Sidebar | Chat | Preview */}
       <div className="flex-1 flex min-h-0">
         {!explorerOpen && (
-          <div className="w-9 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col items-center justify-end pb-3 pt-2">
-            <button
-              type="button"
-              onClick={() => setExplorerOpen(true)}
-              className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
-              title={t("workspace.showExplorer")}
-            >
-              <PanelLeftOpen size={18} />
-            </button>
+          <div className="flex w-9 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)]">
+            <div className="flex h-9 shrink-0 items-center justify-center border-b border-[var(--color-border)]">
+              <button
+                type="button"
+                onClick={() => setExplorerOpen(true)}
+                className="rounded-md p-1 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                title={t("workspace.showExplorer")}
+              >
+                <PanelLeftOpen size={16} />
+              </button>
+            </div>
           </div>
         )}
 
@@ -610,6 +761,16 @@ export default function Home() {
               className="shrink-0 bg-[var(--color-surface)] flex flex-col h-full min-h-0 overflow-hidden"
               style={{ width: explorerWidth }}
             >
+              <div className="flex h-9 shrink-0 items-center justify-end border-b border-[var(--color-border)] px-2.5">
+                <button
+                  type="button"
+                  onClick={() => setExplorerOpen(false)}
+                  className="rounded-md p-1 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                  title={t("workspace.hideExplorer")}
+                >
+                  <PanelLeftClose size={16} />
+                </button>
+              </div>
               <div
                 ref={sidebarStackRef}
                 className="flex-1 min-h-0 flex flex-col overflow-hidden"
@@ -630,19 +791,19 @@ export default function Home() {
                       }
                 }
               >
-                <div className="shrink-0 flex items-stretch min-w-0">
+                <div className="flex h-9 min-w-0 shrink-0 items-stretch border-b border-[var(--color-border)]">
                   <button
                     type="button"
                     onClick={() => setSidebarConversationsOpen((o) => !o)}
-                    className="flex-1 flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors uppercase tracking-wider text-left min-w-0"
+                    className="flex min-w-0 flex-1 items-center gap-1.5 px-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text)]"
                   >
-                    {sidebarConversationsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    {sidebarConversationsOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                     <span className="truncate">{t("sidebar.conversations")}</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleNewSession()}
-                    className="shrink-0 self-center mr-2 p-1 rounded-md hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                    className="mr-1.5 shrink-0 self-center rounded-md p-1 transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)]"
                     title={t("chat.newChat")}
                   >
                     <Plus size={12} />
@@ -714,36 +875,36 @@ export default function Home() {
                   minHeight: bothSidebarListsOpen || sidebarFilesOpen ? 0 : undefined,
                 }}
               >
-                <div className="shrink-0 flex items-stretch gap-0.5 min-w-0">
+                <div className="flex h-9 min-w-0 shrink-0 items-stretch gap-0.5 border-b border-[var(--color-border)]">
                   <button
                     type="button"
                     onClick={() => setSidebarFilesOpen((o) => !o)}
-                    className="flex-1 min-w-0 flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors uppercase tracking-wider text-left"
+                    className="flex min-w-0 flex-1 items-center gap-1.5 px-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text)]"
                   >
-                    {sidebarFilesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    {sidebarFilesOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                     <span className="truncate">{t("sidebar.files")}</span>
                   </button>
-                  <div className="flex items-center shrink-0 pr-1.5 gap-0.5">
+                  <div className="flex shrink-0 items-center gap-0.5 pr-1.5">
                     <button
                       type="button"
                       onClick={handleDownload}
-                      className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                      className="rounded-md p-1 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)]"
                       title={t("app.export")}
                     >
-                      <Download size={15} />
+                      <Download size={14} />
                     </button>
                     <button
                       type="button"
                       onClick={() => void handleShare()}
                       className={cn(
-                        "p-1.5 rounded-md transition-colors",
+                        "rounded-md p-1 transition-colors",
                         shareCopied
-                          ? "text-green-600 bg-green-500/10"
-                          : "text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
+                          ? "bg-green-500/10 text-green-600"
+                          : "text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)]"
                       )}
                       title={shareCopied ? t("app.copied") : t("app.share")}
                     >
-                      {shareCopied ? <Check size={15} /> : <Share2 size={15} />}
+                      {shareCopied ? <Check size={14} /> : <Share2 size={14} />}
                     </button>
                   </div>
                 </div>
@@ -801,25 +962,6 @@ export default function Home() {
                 )}
               </div>
               </div>
-
-              <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-t border-[var(--color-border)] bg-[var(--color-surface)]">
-                <button
-                  type="button"
-                  className="w-8 h-8 rounded-full bg-[var(--color-accent)]/15 flex items-center justify-center shrink-0 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/25 transition-colors"
-                  title={projectName}
-                  aria-label={projectName}
-                >
-                  <NextLogo className="w-[15px] h-[15px]" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setExplorerOpen(false)}
-                  className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors shrink-0"
-                  title={t("workspace.hideExplorer")}
-                >
-                  <PanelLeftClose size={18} />
-                </button>
-              </div>
             </aside>
             <VerticalPanelResizeHandle
               title={t("workspace.resizeColumns")}
@@ -836,42 +978,43 @@ export default function Home() {
               className="shrink-0 bg-[var(--color-surface)] flex flex-col min-h-0 overflow-hidden"
               style={{ width: chatWidth }}
             >
-              <div className="px-3 py-2.5 border-b border-[var(--color-border)] flex items-center gap-2 shrink-0">
+              <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-[var(--color-border)] px-2.5">
                 <div
-                  className="w-7 h-7 rounded-full bg-[var(--color-accent)]/20 flex items-center justify-center shrink-0"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--color-accent)]/20"
                   title={t("app.agent")}
                 >
-                  <Bot size={16} className="text-[var(--color-accent)]" />
+                  <Bot size={14} className="text-[var(--color-accent)]" />
                 </div>
-                <span className="flex-1 text-sm font-medium truncate min-w-0">
+                <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-text)]">
                   {sessions.find((s) => s.id === sessionId)?.title || t("chat.newChat")}
                 </span>
                 <button
                   type="button"
                   onClick={() => void handleNewSession()}
-                  className="shrink-0 p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                  className="shrink-0 rounded-md p-1 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)]"
                   title={t("chat.newChat")}
                 >
-                  <MessageSquarePlus size={16} />
+                  <MessageSquarePlus size={15} />
                 </button>
                 <button
                   type="button"
                   onClick={() => setChatOpen(false)}
-                  className="shrink-0 p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+                  className="shrink-0 rounded-md p-1 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
                   title={t("workspace.closeAgent")}
                 >
-                  <X size={16} />
+                  <X size={15} />
                 </button>
               </div>
               <div className="flex-1 min-h-0">
                 <ChatPanel
                   messages={messages}
-                  toolCalls={toolCalls}
                   isLoading={isLoading}
                   onSend={handleSend}
                   onCancel={handleCancel}
                   onRetry={handleRetry}
                   t={t}
+                  mentionsEnabled={Boolean(projectId)}
+                  mentionOptions={chatMentions}
                 />
               </div>
             </aside>
@@ -887,7 +1030,7 @@ export default function Home() {
         {/* Main: canvas toolbar + Preview / Panorama */}
         <main className="flex flex-col flex-1 min-w-0 min-h-0">
           {canvasMode === "panorama" && (
-            <div className="shrink-0 flex items-center justify-end gap-0.5 px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
+            <div className="flex h-9 shrink-0 items-center justify-end gap-0.5 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-2.5">
               {canvasModeSwitcher}
             </div>
           )}
@@ -896,6 +1039,7 @@ export default function Home() {
               <Panorama
                 projectId={projectId}
                 activePageId={activePageId}
+                refreshKey={previewRefresh}
                 onSelectPage={setActivePageId}
                 onOpenPage={(pageId) => {
                   setActivePageId(pageId);
@@ -915,6 +1059,12 @@ export default function Home() {
           </div>
         </main>
       </div>
+
+      <NewProjectDialog
+        open={showNewProject}
+        onClose={() => setShowNewProject(false)}
+        onCreate={(name) => handleCreateProject(name)}
+      />
     </div>
   );
 }
