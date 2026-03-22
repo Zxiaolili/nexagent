@@ -19,6 +19,7 @@ import { useEventSource, useChatStream } from "@/hooks/use-event-source";
 import { NewProjectDialog } from "@/components/editor/new-project-dialog";
 import { useProjectTheme, type ProjectTheme, type ColorSchemeOverride } from "@/hooks/use-project-theme";
 import { useI18n } from "@/lib/i18n";
+import { formatLocalDateTime, parseStoredInstantMs } from "@/lib/datetime";
 import { cn } from "@/lib/cn";
 import { Panorama } from "@/components/editor/panorama";
 import { NextLogo } from "@/components/brand/next-logo";
@@ -52,7 +53,8 @@ type FileEntry = { path: string; name: string; type: "file" | "directory" };
 
 function relativeTime(dateStr: string, t: (key: string) => string): string {
   const now = Date.now();
-  const then = new Date(dateStr).getTime();
+  const then = parseStoredInstantMs(dateStr);
+  if (Number.isNaN(then)) return dateStr;
   const diffMs = now - then;
   const diffMin = Math.floor(diffMs / 60000);
   if (diffMin < 1) return t("sidebar.justNow");
@@ -307,21 +309,147 @@ export default function Home() {
             const last = updated[updated.length - 1];
             if (last?.role !== "assistant" || last.isError) return prev;
 
-            const entry: ToolCallInfo = {
-              toolName: data.toolName,
-              status: data.status,
-              args: data.args,
-              result: data.result,
-            };
+            const kind = data.kind as
+              | "start"
+              | "args_delta"
+              | "args_complete"
+              | "result"
+              | undefined;
+            const toolCallId =
+              (data.toolCallId as string | undefined) ??
+              `anon-${data.toolName}-${Date.now()}`;
 
             const nextBlocks = [...(last.blocks ?? [])];
             let nextContent = last.content;
 
-            if (nextContent) {
-              nextBlocks.push({ type: "text", text: nextContent });
-              nextContent = "";
+            const findToolBlockIndex = () =>
+              nextBlocks.findIndex(
+                (b) =>
+                  b.type === "tool" && b.tool.toolCallId === toolCallId
+              );
+
+            const flushProseBeforeTool = () => {
+              if (nextContent.trim()) {
+                nextBlocks.push({ type: "text", text: nextContent });
+                nextContent = "";
+              }
+            };
+
+            if (kind == null) {
+              const entry: ToolCallInfo = {
+                toolCallId,
+                toolName: data.toolName,
+                status: data.status,
+                args: data.args,
+                result: data.result,
+              };
+              flushProseBeforeTool();
+              nextBlocks.push({ type: "tool", tool: entry });
+              updated[updated.length - 1] = {
+                ...last,
+                blocks: nextBlocks,
+                content: nextContent,
+              };
+              return updated;
             }
-            nextBlocks.push({ type: "tool", tool: entry });
+
+            if (kind === "start") {
+              flushProseBeforeTool();
+              nextBlocks.push({
+                type: "tool",
+                tool: {
+                  toolCallId,
+                  toolName: data.toolName,
+                  status: "running",
+                  argsText: "",
+                },
+              });
+            } else if (kind === "args_delta") {
+              const idx = findToolBlockIndex();
+              const delta = (data.argsTextDelta as string | undefined) ?? "";
+              if (idx >= 0 && nextBlocks[idx]?.type === "tool") {
+                const cur = nextBlocks[idx] as {
+                  type: "tool";
+                  tool: ToolCallInfo;
+                };
+                nextBlocks[idx] = {
+                  type: "tool",
+                  tool: {
+                    ...cur.tool,
+                    argsText: (cur.tool.argsText ?? "") + delta,
+                  },
+                };
+              } else {
+                nextBlocks.push({
+                  type: "tool",
+                  tool: {
+                    toolCallId,
+                    toolName: data.toolName,
+                    status: "running",
+                    argsText: delta,
+                  },
+                });
+              }
+            } else if (kind === "args_complete") {
+              const idx = findToolBlockIndex();
+              const args = (data.args as Record<string, unknown> | undefined) ?? {};
+              if (idx >= 0 && nextBlocks[idx]?.type === "tool") {
+                const cur = nextBlocks[idx] as {
+                  type: "tool";
+                  tool: ToolCallInfo;
+                };
+                nextBlocks[idx] = {
+                  type: "tool",
+                  tool: {
+                    ...cur.tool,
+                    toolName: data.toolName,
+                    args,
+                    argsText: undefined,
+                    status: "running",
+                  },
+                };
+              } else {
+                flushProseBeforeTool();
+                nextBlocks.push({
+                  type: "tool",
+                  tool: {
+                    toolCallId,
+                    toolName: data.toolName,
+                    args,
+                    status: "running",
+                  },
+                });
+              }
+            } else if (kind === "result") {
+              const idx = findToolBlockIndex();
+              if (idx >= 0 && nextBlocks[idx]?.type === "tool") {
+                const cur = nextBlocks[idx] as {
+                  type: "tool";
+                  tool: ToolCallInfo;
+                };
+                nextBlocks[idx] = {
+                  type: "tool",
+                  tool: {
+                    ...cur.tool,
+                    toolName: data.toolName,
+                    result: data.result as string | undefined,
+                    status: data.status,
+                    argsText: undefined,
+                  },
+                };
+              } else {
+                flushProseBeforeTool();
+                nextBlocks.push({
+                  type: "tool",
+                  tool: {
+                    toolCallId,
+                    toolName: data.toolName,
+                    result: data.result,
+                    status: data.status,
+                  },
+                });
+              }
+            }
 
             updated[updated.length - 1] = {
               ...last,
@@ -820,6 +948,7 @@ export default function Home() {
                         <button
                           key={s.id}
                           type="button"
+                          title={formatLocalDateTime(s.updatedAt, locale)}
                           onClick={() => {
                             setChatOpen(true);
                             void handleSwitchSession(s.id);

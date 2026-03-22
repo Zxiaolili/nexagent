@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
 import type Database from "better-sqlite3";
+import { normalizeStoredTimestamp } from "../util/utc-timestamp.js";
 
 export interface Message {
   id: string;
@@ -25,11 +26,12 @@ export class SessionManager {
 
   create(projectId: string, title = ""): Session {
     const id = nanoid(12);
+    const ts = new Date().toISOString();
     this.db
       .prepare(
-        `INSERT INTO sessions (id, project_id, title) VALUES (?, ?, ?)`
+        `INSERT INTO sessions (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`
       )
-      .run(id, projectId, title);
+      .run(id, projectId, title, ts, ts);
 
     return this.get(id)!;
   }
@@ -43,8 +45,8 @@ export class SessionManager {
       id: row.id,
       projectId: row.project_id,
       title: row.title,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      createdAt: normalizeStoredTimestamp(row.created_at),
+      updatedAt: normalizeStoredTimestamp(row.updated_at),
     };
   }
 
@@ -58,8 +60,8 @@ export class SessionManager {
       id: r.id,
       projectId: r.project_id,
       title: r.title,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
+      createdAt: normalizeStoredTimestamp(r.created_at),
+      updatedAt: normalizeStoredTimestamp(r.updated_at),
     }));
   }
 
@@ -74,10 +76,11 @@ export class SessionManager {
     }
   ): Message {
     const id = nanoid(12);
+    const ts = new Date().toISOString();
     this.db
       .prepare(
-        `INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, tool_name)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, tool_name, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -86,12 +89,13 @@ export class SessionManager {
         content,
         extra?.toolCalls ?? null,
         extra?.toolCallId ?? null,
-        extra?.toolName ?? null
+        extra?.toolName ?? null,
+        ts
       );
 
     this.db
-      .prepare(`UPDATE sessions SET updated_at = datetime('now') WHERE id = ?`)
-      .run(sessionId);
+      .prepare(`UPDATE sessions SET updated_at = ? WHERE id = ?`)
+      .run(ts, sessionId);
 
     return {
       id,
@@ -101,7 +105,7 @@ export class SessionManager {
       toolCalls: extra?.toolCalls,
       toolCallId: extra?.toolCallId,
       toolName: extra?.toolName,
-      createdAt: new Date().toISOString(),
+      createdAt: ts,
     };
   }
 
@@ -125,7 +129,7 @@ export class SessionManager {
       toolCalls: r.tool_calls,
       toolCallId: r.tool_call_id,
       toolName: r.tool_name,
-      createdAt: r.created_at,
+      createdAt: normalizeStoredTimestamp(r.created_at),
     }));
   }
 }

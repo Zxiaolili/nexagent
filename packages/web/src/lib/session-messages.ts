@@ -73,10 +73,11 @@ export function sessionRowsToChatMessages(raw: SessionApiMessageRow[]): ChatMess
           for (const tc of parsed) {
             const full = results.get(tc.toolCallId) ?? "";
             const tool: ToolCallInfo = {
+              toolCallId: tc.toolCallId,
               toolName: tc.toolName,
               status: "completed",
               args: tc.args,
-              result: full.slice(0, 500),
+              result: full,
             };
             blocks.push({ type: "tool", tool });
           }

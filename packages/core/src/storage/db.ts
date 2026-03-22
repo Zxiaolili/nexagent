@@ -18,8 +18,8 @@ export function getDb(dataDir: string): Database.Database {
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
       title TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+      updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -30,7 +30,7 @@ export function getDb(dataDir: string): Database.Database {
       tool_calls TEXT,
       tool_call_id TEXT,
       tool_name TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     );
 
     CREATE INDEX IF NOT EXISTS idx_messages_session
@@ -45,6 +45,16 @@ export function getDb(dataDir: string): Database.Database {
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_shares_token ON shares(token);
+  `);
+
+  db.exec(`
+    UPDATE sessions SET
+      created_at = substr(created_at, 1, 10) || 'T' || substr(created_at, 12) || 'Z',
+      updated_at = substr(updated_at, 1, 10) || 'T' || substr(updated_at, 12) || 'Z'
+    WHERE length(created_at) = 19 AND substr(created_at, 11, 1) = ' ';
+    UPDATE messages SET
+      created_at = substr(created_at, 1, 10) || 'T' || substr(created_at, 12) || 'Z'
+    WHERE length(created_at) = 19 AND substr(created_at, 11, 1) = ' ';
   `);
 
   return db;

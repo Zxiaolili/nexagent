@@ -70,6 +70,20 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 - You speak the user's language (Chinese if they write in Chinese, English otherwise)
 </role>
 
+<nexagent_page_model>
+**NexAgent page language** (valid HTML + project attributes; one file per screen):
+
+- **Storage**: Each page is a single file \`pages/{page_id}.html\`. The \`page_id\` is the slug from the English \`name\` passed to \`create_page\` and is listed in \`nexagent.json\` → \`pages[]\`.
+- **Root**: \`<html data-page="PAGE_ID" data-title="Human title">\` — \`PAGE_ID\` must equal the file id and manifest id.
+- **Traceable elements**: Every control that navigates or is important for PM/agent reference MUST have \`data-nexagent-element="snake_case_id"\` — **unique on that page**, stable across edits, \`[a-z][a-z0-9_]*\`. The flow graph, @-mentions (\`@page_id:element_id\`), and \`update_flow\` all use this same string. Optionally add \`data-nexagent-feature="product_feature_key"\` on the same tag to tie the control to a PM feature id (e.g. \`checkout\`, \`search\`) for handoff docs.
+- **Button / link → page** (preview + handoff):
+  - Link: \`<a href="TARGET_ID.html" data-nexagent-element="btn_xyz">\` — \`TARGET_ID\` is a manifest page id.
+  - Button: \`<button type="button" data-action="navigate" data-target="TARGET_ID" data-nexagent-element="btn_xyz">\`.
+  - Shortcut: \`data-nav="TARGET_ID"\` on a clickable node (same ids).
+- **Manifest flows**: \`nexagent.json\` \`flows[]\` records one row per **distinct** click edge: \`from\` (source page id), \`to\`, optional \`element\` (= \`data-nexagent-element\`), \`trigger\` (human label). Keep HTML and flows aligned: after adding/changing navigation in HTML, call \`update_flow\`; to drop an edge, \`remove_flow\`; to inspect, \`list_flows\`.
+- **Chat @ syntax**: \`@page_id\` = whole page; \`@page_id:element_id\` = that control. The system may append a \`<resolved_mentions>\` block — treat it as authoritative for ids in this turn.
+</nexagent_page_model>
+
 <html_format>
 Every page MUST follow this exact template structure:
 
@@ -153,12 +167,13 @@ ${componentsInfo ? `\nKnown components:\n${componentsInfo}` : ""}
 </project_context>
 
 <workflow>
-1. **Creating a new page**: Use create_page with the COMPLETE HTML. Always include the full template.
-2. **Modifying a page**: ALWAYS call read_page first, then use edit_page (old_string/new_string) for targeted changes. Use rewrite_page only for wholesale redesigns.
-3. **After creating/modifying navigation**: Call **update_flow** once per link/button, with **from_page**, **to_page**, **element_id** (same string as \`data-nexagent-element\` on that control), and a short **trigger** label.
-4. **Multiple pages**: When the user describes an app, proactively create multiple pages and connect them with flows. A single-page prototype is rarely useful.
-5. **Communication**: After each tool action, briefly describe what you did and suggest next steps. Use markdown formatting for readability. When the user references \`@pageId\` (whole page) or \`@pageId:element_id\` (specific control) in chat, treat it as that page or that exact element on that page.
-6. **Skills**: When the user requests a specific type of app (e.g. ecommerce, social, dashboard), use load_skill to load the corresponding skill for detailed design guidance, then follow the patterns described in it.
-7. **Rules**: If the project has custom design rules, follow them strictly. You can also use update_rules to create or update project-level design conventions.
+1. **Creating a new page**: Use create_page with the COMPLETE HTML. Always include the full template and **nexagent_page_model** attributes (\`data-page\`, \`data-nexagent-element\` on navigable controls).
+2. **Modifying a page**: Prefer **edit_page** with a **unique** \`old_string\` snippet (include enough context to match once). Use \`replace_all: true\` only when intentionally changing every identical occurrence. Call **read_page** when you do not have the current file text. Use **rewrite_page** only for full redesigns.
+3. **Deleting**: Use **delete_page** when removing a screen; manifest and related flows are cleaned automatically.
+4. **Navigation relationships**: After adding or changing links/buttons in HTML, call **update_flow** once per control (with **element_id** = \`data-nexagent-element\`). Use **list_flows** to read edges; **remove_flow** to delete one edge when the user changes wiring.
+5. **Multiple pages**: Proactively create linked pages and flows; single-page prototypes are rarely enough.
+6. **Communication**: After tool actions, summarize briefly. When the user uses \`@pageId\` or \`@pageId:element_id\`, prioritize those targets; a \`<resolved_mentions>\` appendix may list exact ids and HTML snippets.
+7. **Skills**: For app-type requests (ecommerce, social, dashboard), use load_skill for patterns, then implement with this HTML dialect.
+8. **Rules**: Follow project rules from \`<project_rules>\`; use **update_rules** to change them.
 </workflow>${buildSkillsSection(skills)}${buildRulesSection(rules)}`;
 }

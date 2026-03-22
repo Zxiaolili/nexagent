@@ -195,15 +195,25 @@ export class ProjectManager {
     projectId: string,
     pageId: string,
     oldString: string,
-    newString: string
-  ): Promise<{ success: boolean; content: string }> {
+    newString: string,
+    options?: { replaceAll?: boolean }
+  ): Promise<{ success: boolean; content: string; replacements: number }> {
     const content = await this.readPage(projectId, pageId);
     if (!content.includes(oldString)) {
-      return { success: false, content };
+      return { success: false, content, replacements: 0 };
     }
-    const updated = content.replace(oldString, newString);
+    let updated: string;
+    let replacements: number;
+    if (options?.replaceAll) {
+      const parts = content.split(oldString);
+      replacements = parts.length - 1;
+      updated = parts.join(newString);
+    } else {
+      replacements = 1;
+      updated = content.replace(oldString, newString);
+    }
     await this.writePage(projectId, pageId, updated);
-    return { success: true, content: updated };
+    return { success: true, content: updated, replacements };
   }
 
   async deletePage(projectId: string, pageId: string): Promise<void> {

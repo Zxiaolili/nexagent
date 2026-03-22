@@ -13,8 +13,12 @@ export interface BusEvents {
   };
   "session.tool_call": {
     sessionId: string;
+    toolCallId: string;
     toolName: string;
-    args: Record<string, unknown>;
+    /** Incremental UI updates; omit only on legacy payloads. */
+    kind?: "start" | "args_delta" | "args_complete" | "result";
+    argsTextDelta?: string;
+    args?: Record<string, unknown>;
     result?: string;
     status: "running" | "completed" | "error";
   };

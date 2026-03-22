@@ -2,10 +2,19 @@ import { streamText, type CoreMessage, type CoreToolMessage } from "ai";
 import { resolveProvider, type ProviderConfig } from "../provider/index.js";
 import { buildTools } from "../tool/registry.js";
 import { buildSystemPrompt } from "./system-prompt.js";
+import { buildMentionContextSuffix } from "./mention-context.js";
 import { bus } from "../bus/index.js";
 import { loadSkills } from "../skill/index.js";
 import type { ProjectManager } from "../project/manager.js";
 import type { SessionManager, Message } from "./index.js";
+
+/** Subset of AI SDK fullStream parts we forward to the UI (SDK typings omit tool-result in some versions). */
+type AgentUiStreamPart =
+  | { type: "text-delta"; textDelta: string }
+  | { type: "tool-call-streaming-start"; toolCallId: string; toolName: string }
+  | { type: "tool-call-delta"; toolCallId: string; toolName: string; argsTextDelta: string }
+  | { type: "tool-call"; toolCallId: string; toolName: string; args: Record<string, unknown> }
+  | { type: "tool-result"; toolCallId: string; toolName: string; result: unknown; isError?: boolean };
 
 export interface RunOptions {
   sessionId: string;
@@ -41,6 +50,13 @@ export async function runAgent(
 
   const historyMessages = sm.getMessages(sessionId);
   const coreMessages = rebuildCoreMessages(historyMessages);
+  const mentionSuffix = await buildMentionContextSuffix(pm, projectId, userMessage);
+  if (mentionSuffix) {
+    const last = coreMessages[coreMessages.length - 1];
+    if (last?.role === "user" && typeof last.content === "string") {
+      last.content = `${last.content}\n\n${mentionSuffix}`;
+    }
+  }
 
   console.log("[runAgent] resolving provider", { sessionId, provider: providerConfig?.provider });
   const model = resolveProvider(providerConfig);
@@ -61,36 +77,26 @@ export async function runAgent(
         | { toolCallId: string; toolName: string; args: Record<string, unknown> }[]
         | undefined;
       const results = event.toolResults as
-        | { toolCallId: string; result: string }[]
+        | { toolCallId: string; toolName: string; result: unknown }[]
         | undefined;
 
       if (calls && calls.length > 0) {
-        // Prose generated in this step before tool calls (must stay on the same row for LLM history)
         const stepText = event.text ?? "";
         sm.addMessage(sessionId, "assistant", stepText, {
           toolCalls: JSON.stringify(calls),
         });
 
-        // Store each tool result
         for (let i = 0; i < calls.length; i++) {
           const tc = calls[i];
           const tr = results?.[i];
-          const resultText = typeof tr?.result === "string" ? tr.result : JSON.stringify(tr?.result ?? "");
+          const resultText = formatToolResultText(tr?.result);
 
           sm.addMessage(sessionId, "tool", resultText, {
             toolCallId: tc.toolCallId,
             toolName: tc.toolName,
           });
-
-          bus.emit("session.tool_call", {
-            sessionId,
-            toolName: tc.toolName,
-            args: tc.args,
-            result: resultText.slice(0, 500),
-            status: "completed",
-          });
         }
-        console.log("[runAgent] onStepFinish tool calls", { sessionId, count: calls.length, names: calls.map((c: any) => c.toolName) });
+        console.log("[runAgent] onStepFinish tool calls", { sessionId, count: calls.length, names: calls.map((c) => c.toolName) });
         return;
       }
 
@@ -104,18 +110,72 @@ export async function runAgent(
   console.log("[runAgent] consuming fullStream", { sessionId });
   let streamAborted = false;
   try {
-    for await (const part of result.fullStream) {
-      if (part.type !== "text-delta") continue;
-      chunkCount++;
-      const delta = part.textDelta;
-      if (chunkCount <= 3) console.log("[runAgent] text chunk", { sessionId, chunkIndex: chunkCount, part: delta.slice(0, 30) });
-      fullText += delta;
-      bus.emit("session.message", {
-        sessionId,
-        role: "assistant",
-        content: delta,
-        done: false,
-      });
+    const uiStream = result.fullStream as unknown as AsyncIterable<AgentUiStreamPart>;
+    for await (const part of uiStream) {
+      switch (part.type) {
+        case "text-delta": {
+          chunkCount++;
+          const delta = part.textDelta;
+          if (chunkCount <= 3) {
+            console.log("[runAgent] text chunk", {
+              sessionId,
+              chunkIndex: chunkCount,
+              part: delta.slice(0, 30),
+            });
+          }
+          fullText += delta;
+          bus.emit("session.message", {
+            sessionId,
+            role: "assistant",
+            content: delta,
+            done: false,
+          });
+          break;
+        }
+        case "tool-call-streaming-start":
+          bus.emit("session.tool_call", {
+            sessionId,
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            kind: "start",
+            status: "running",
+          });
+          break;
+        case "tool-call-delta":
+          bus.emit("session.tool_call", {
+            sessionId,
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            kind: "args_delta",
+            argsTextDelta: part.argsTextDelta,
+            status: "running",
+          });
+          break;
+        case "tool-call":
+          bus.emit("session.tool_call", {
+            sessionId,
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            kind: "args_complete",
+            args: part.args as Record<string, unknown>,
+            status: "running",
+          });
+          break;
+        case "tool-result": {
+          const resultText = formatToolResultText(part.result);
+          bus.emit("session.tool_call", {
+            sessionId,
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            kind: "result",
+            result: resultText,
+            status: part.isError ? "error" : "completed",
+          });
+          break;
+        }
+        default:
+          break;
+      }
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -218,4 +278,13 @@ function rebuildCoreMessages(messages: Message[]): CoreMessage[] {
   }
 
   return result;
+}
+
+function formatToolResultText(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value ?? null);
+  } catch {
+    return String(value);
+  }
 }

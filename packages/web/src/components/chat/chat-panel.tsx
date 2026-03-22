@@ -44,9 +44,13 @@ const TEMPLATE_CARDS = [
 ] as const;
 
 export interface ToolCallInfo {
+  /** Stable id from the model; used when merging streaming tool events */
+  toolCallId?: string;
   toolName: string;
   status: "running" | "completed" | "error";
   args?: Record<string, unknown>;
+  /** Incremental tool arguments JSON before the final parsed object arrives */
+  argsText?: string;
   result?: string;
 }
 
@@ -203,11 +207,29 @@ const TOOL_KEYS: Record<string, string> = {
   read_page: "tool.readingPage",
   list_pages: "tool.listingPages",
   delete_page: "tool.deletingPage",
+  list_flows: "tool.listingFlows",
+  remove_flow: "tool.removingFlow",
   update_flow: "tool.updatingFlow",
   update_theme: "tool.updatingTheme",
   load_skill: "tool.loadingSkill",
   update_rules: "tool.updatingRules",
 };
+
+const TOOL_BODY_PREVIEW_MAX = 48_000;
+
+function stringifyArgsPretty(args: Record<string, unknown> | undefined): string {
+  if (!args || Object.keys(args).length === 0) return "";
+  try {
+    return JSON.stringify(args, null, 2);
+  } catch {
+    return String(args);
+  }
+}
+
+function truncateBody(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max)}\n\n… ${s.length - max} more characters`;
+}
 
 function ChatMarkdown({ children }: { children: string }) {
   if (!children) return null;
@@ -290,7 +312,11 @@ function AssistantMessageBody({
         b.type === "text" ? (
           <ChatMarkdown key={`txt-${msg.id}-${idx}`}>{b.text}</ChatMarkdown>
         ) : (
-          <ToolCallCard key={`tool-${msg.id}-${idx}`} tc={b.tool} t={t} />
+          <ToolCallCard
+            key={`tool-${msg.id}-${b.tool.toolCallId ?? idx}`}
+            tc={b.tool}
+            t={t}
+          />
         )
       )}
       {msg.content ? <ChatMarkdown key={`tail-${msg.id}`}>{msg.content}</ChatMarkdown> : null}
@@ -307,54 +333,189 @@ function ToolCallCard({ tc, t }: { tc: ToolCallInfo; t: (key: string) => string 
   const flowTo = (tc.args?.to_page || "") as string;
   const flowEl = (tc.args?.element_id || "") as string;
   const flowSummary =
-    tc.toolName === "update_flow" && (flowFrom || flowTo)
+    (tc.toolName === "update_flow" || tc.toolName === "remove_flow") &&
+    (flowFrom || flowTo)
       ? `${flowFrom}${flowEl ? ` [${flowEl}]` : ""} → ${flowTo}`
       : "";
 
+  const hasParsedArgs = Boolean(tc.args && Object.keys(tc.args).length > 0);
+  const streamingArgs = Boolean(tc.argsText?.length) && !hasParsedArgs;
+  const hasDetail =
+    Boolean(tc.result?.trim()) ||
+    hasParsedArgs ||
+    streamingArgs;
+
+  const bulkyContentTools = new Set([
+    "create_page",
+    "rewrite_page",
+    "update_rules",
+  ]);
+
+  const argsForJson =
+    tc.toolName === "edit_page" && tc.args
+      ? Object.fromEntries(
+          Object.entries(tc.args).filter(
+            ([k]) => k !== "old_string" && k !== "new_string"
+          )
+        )
+      : tc.args
+        ? Object.fromEntries(
+            Object.entries(tc.args).filter(
+              ([k]) => !(bulkyContentTools.has(tc.toolName) && k === "content")
+            )
+          )
+        : undefined;
+
+  const bulkyArgContent =
+    bulkyContentTools.has(tc.toolName) && tc.args?.content != null
+      ? String(tc.args.content)
+      : "";
+
+  const oldStr =
+    tc.toolName === "edit_page" ? String(tc.args?.old_string ?? "") : "";
+  const newStr =
+    tc.toolName === "edit_page" ? String(tc.args?.new_string ?? "") : "";
+
+  const resultIsLargeHtml =
+    tc.toolName === "read_page" ||
+    tc.toolName === "create_page" ||
+    tc.toolName === "rewrite_page" ||
+    tc.toolName === "load_skill" ||
+    tc.toolName === "update_rules";
+
   return (
-    <div className="rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] overflow-hidden">
+    <div className="rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] overflow-hidden my-1">
       <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-[var(--color-border)]/30 transition-colors"
+        type="button"
+        onClick={() => hasDetail && setExpanded(!expanded)}
+        disabled={!hasDetail}
+        className={cn(
+          "w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors text-left",
+          hasDetail && "hover:bg-[var(--color-border)]/30",
+          !hasDetail && "opacity-90"
+        )}
       >
         <Wrench
           size={12}
           className={cn(
+            "shrink-0",
             tc.status === "running" && "animate-spin text-yellow-400",
-            tc.status === "completed" && "text-green-400",
+            tc.status === "completed" && "text-emerald-400",
             tc.status === "error" && "text-red-400"
           )}
         />
-        <span className="text-[var(--color-text)]">{label}</span>
-        {flowSummary ? (
-          <span className="font-mono text-[var(--color-text-secondary)] truncate max-w-[200px]">
+        <span className="text-[var(--color-text)] shrink-0">{label}</span>
+        {streamingArgs ? (
+          <span className="font-mono text-[var(--color-text-secondary)] truncate min-w-0 max-w-[min(260px,50vw)] text-[10px] leading-tight opacity-90">
+            {tc.argsText!.length > 90
+              ? `…${tc.argsText!.slice(-88)}`
+              : tc.argsText}
+          </span>
+        ) : tc.status === "running" && hasParsedArgs && !tc.result ? (
+          <span className="text-[10px] text-amber-400/90 truncate">{t("tool.executing")}</span>
+        ) : tc.toolName === "list_flows" ? (
+          <span className="font-mono text-[var(--color-text-secondary)] truncate min-w-0">
+            nexagent.json → flows
+          </span>
+        ) : flowSummary ? (
+          <span className="font-mono text-[var(--color-text-secondary)] truncate min-w-0 max-w-[min(280px,45vw)]">
             {flowSummary}
           </span>
         ) : pageArg ? (
-          <span className="font-mono text-[var(--color-text-secondary)]">
+          <span className="font-mono text-[var(--color-text-secondary)] truncate min-w-0 max-w-[min(240px,40vw)]">
             {pageArg}
           </span>
         ) : null}
-        <span className="ml-auto">
+        <span className="ml-auto shrink-0 flex items-center gap-1">
           {tc.status === "running" && (
-            <span className="text-yellow-400">...</span>
+            <span className="text-yellow-400">…</span>
           )}
           {tc.status === "completed" && (
-            <span className="text-green-400">✓</span>
+            <span className="text-emerald-400">✓</span>
           )}
           {tc.status === "error" && (
             <span className="text-red-400">✗</span>
           )}
+          {hasDetail &&
+            (expanded ? (
+              <ChevronDown size={12} className="text-[var(--color-text-secondary)]" />
+            ) : (
+              <ChevronRight size={12} className="text-[var(--color-text-secondary)]" />
+            ))}
         </span>
-        {tc.result && (
-          expanded
-            ? <ChevronDown size={12} className="text-[var(--color-text-secondary)]" />
-            : <ChevronRight size={12} className="text-[var(--color-text-secondary)]" />
-        )}
       </button>
-      {expanded && tc.result && (
-        <div className="px-3 py-2 border-t border-[var(--color-border)] text-xs text-[var(--color-text-secondary)] font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
-          {tc.result}
+      {expanded && hasDetail && (
+        <div className="px-3 py-2.5 border-t border-[var(--color-border)] space-y-3 text-xs">
+          {tc.toolName === "edit_page" && (oldStr || newStr) ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div className="min-w-0">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-secondary)] mb-1">
+                  {t("tool.replaceBefore")}
+                </div>
+                <pre className="text-[11px] leading-snug font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto rounded-md bg-[var(--color-bg)]/80 border border-[var(--color-border)] p-2 text-red-200/90">
+                  {truncateBody(oldStr, TOOL_BODY_PREVIEW_MAX)}
+                </pre>
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-secondary)] mb-1">
+                  {t("tool.replaceAfter")}
+                </div>
+                <pre className="text-[11px] leading-snug font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto rounded-md bg-[var(--color-bg)]/80 border border-[var(--color-border)] p-2 text-emerald-200/90">
+                  {truncateBody(newStr, TOOL_BODY_PREVIEW_MAX)}
+                </pre>
+              </div>
+            </div>
+          ) : null}
+
+          {streamingArgs ? (
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-secondary)] mb-1">
+                {t("tool.streamingArgs")}
+              </div>
+              <pre className="text-[11px] leading-snug font-mono whitespace-pre-wrap break-all max-h-52 overflow-y-auto rounded-md bg-[var(--color-bg)]/80 border border-[var(--color-accent)]/25 p-2 text-[var(--color-text)] relative">
+                {tc.argsText}
+                <span className="inline-block w-0.5 h-3.5 bg-[var(--color-accent)] ml-px align-middle animate-pulse rounded-sm" />
+              </pre>
+            </div>
+          ) : null}
+
+          {argsForJson && Object.keys(argsForJson).length > 0 ? (
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-secondary)] mb-1">
+                {t("tool.args")}
+              </div>
+              <pre className="text-[11px] leading-snug font-mono whitespace-pre-wrap break-all max-h-40 overflow-y-auto rounded-md bg-[var(--color-bg)]/80 border border-[var(--color-border)] p-2 text-[var(--color-text-secondary)]">
+                {truncateBody(stringifyArgsPretty(argsForJson), TOOL_BODY_PREVIEW_MAX)}
+              </pre>
+            </div>
+          ) : null}
+
+          {bulkyArgContent ? (
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-secondary)] mb-1">
+                {t("tool.bodyPreview")}
+              </div>
+              <pre className="text-[11px] leading-snug font-mono whitespace-pre-wrap break-all max-h-64 overflow-y-auto rounded-md bg-[var(--color-bg)]/80 border border-[var(--color-border)] p-2 text-[var(--color-text)]">
+                {truncateBody(bulkyArgContent, TOOL_BODY_PREVIEW_MAX)}
+              </pre>
+            </div>
+          ) : null}
+
+          {tc.result?.trim() ? (
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-secondary)] mb-1">
+                {t("tool.result")}
+              </div>
+              <pre
+                className={cn(
+                  "text-[11px] leading-snug font-mono whitespace-pre-wrap break-all rounded-md bg-[var(--color-bg)]/80 border border-[var(--color-border)] p-2 text-[var(--color-text)]",
+                  resultIsLargeHtml ? "max-h-80 overflow-y-auto" : "max-h-48 overflow-y-auto"
+                )}
+              >
+                {truncateBody(tc.result, TOOL_BODY_PREVIEW_MAX)}
+              </pre>
+            </div>
+          ) : null}
         </div>
       )}
     </div>
