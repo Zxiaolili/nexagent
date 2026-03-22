@@ -310,7 +310,12 @@ export function Panorama({ projectId, activePageId, onSelectPage, onOpenPage }: 
                 ...e,
                 style: { ...e.style, stroke: EDGE_COLOR.hover, strokeWidth: 2.5 },
                 markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLOR.hover },
-                labelStyle: { ...(e.labelStyle as Record<string, unknown>), fill: EDGE_LABEL.hover },
+                labelStyle: {
+                  fontSize: 11,
+                  fontWeight: 500,
+                  ...((e.labelStyle ?? {}) as Record<string, unknown>),
+                  fill: EDGE_LABEL.hover,
+                },
               }
             : e
         )
@@ -328,7 +333,12 @@ export function Panorama({ projectId, activePageId, onSelectPage, onOpenPage }: 
                 ...e,
                 style: { ...e.style, stroke: EDGE_COLOR.idle, strokeWidth: 1.5 },
                 markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLOR.idle },
-                labelStyle: { ...(e.labelStyle as Record<string, unknown>), fill: EDGE_LABEL.idle },
+                labelStyle: {
+                  fontSize: 11,
+                  fontWeight: 500,
+                  ...((e.labelStyle ?? {}) as Record<string, unknown>),
+                  fill: EDGE_LABEL.idle,
+                },
               }
             : e
         )

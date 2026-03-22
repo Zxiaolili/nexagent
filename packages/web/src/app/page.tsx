@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "@/lib/api";
 import { type PageItem } from "@/components/editor/page-tree";
 import { type FlowDef } from "@/components/editor/flow-graph";
@@ -16,10 +16,14 @@ import { useProjectTheme, type ProjectTheme, type ColorSchemeOverride } from "@/
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { Panorama } from "@/components/editor/panorama";
+import { NextLogo } from "@/components/brand/next-logo";
+import {
+  VerticalPanelResizeHandle,
+  TrackedHorizontalResizeHandle,
+} from "@/components/workspace/panel-resize-handle";
 import {
   Plus,
   FolderOpen,
-  FileText,
   Loader2,
   Download,
   Share2,
@@ -32,13 +36,9 @@ import {
   Play,
   PanelLeftClose,
   PanelLeftOpen,
-  PanelRightClose,
-  PanelRightOpen,
   ChevronDown,
   ChevronRight,
-  MessageCircle,
-  Folder,
-  FileCode,
+  X,
 } from "lucide-react";
 
 type CanvasMode = "experience" | "panorama";
@@ -56,6 +56,10 @@ function relativeTime(dateStr: string, t: (key: string) => string): string {
   if (diffHr < 24) return `${diffHr} ${t("sidebar.hoursAgo")}`;
   const diffDay = Math.floor(diffHr / 24);
   return `${diffDay} ${t("sidebar.daysAgo")}`;
+}
+
+function clampLayout(n: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, n));
 }
 
 export default function Home() {
@@ -95,14 +99,55 @@ export default function Home() {
   const [projectFiles, setProjectFiles] = useState<FileEntry[]>([]);
   const [sidebarConversationsOpen, setSidebarConversationsOpen] = useState(true);
   const [sidebarFilesOpen, setSidebarFilesOpen] = useState(true);
+  const [explorerWidth, setExplorerWidth] = useState(224);
+  const [chatWidth, setChatWidth] = useState(384);
+  const [sidebarConvHeightPx, setSidebarConvHeightPx] = useState(200);
+  const sidebarStackRef = useRef<HTMLDivElement>(null);
+  const sidebarTopPaneRef = useRef<HTMLDivElement>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const { send, cancel } = useChatStream();
+
+  useEffect(() => {
+    try {
+      const ew = Number.parseInt(localStorage.getItem("nexagent-explorer-w") || "", 10);
+      if (!Number.isNaN(ew)) setExplorerWidth(clampLayout(ew, 176, 380));
+      const cw = Number.parseInt(localStorage.getItem("nexagent-chat-w") || "", 10);
+      if (!Number.isNaN(cw)) setChatWidth(clampLayout(cw, 280, 640));
+      const sh = Number.parseInt(localStorage.getItem("nexagent-sidebar-conv-px") || "", 10);
+      if (!Number.isNaN(sh)) setSidebarConvHeightPx(clampLayout(sh, 72, 2000));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("nexagent-explorer-w", String(explorerWidth));
+    } catch {
+      /* ignore */
+    }
+  }, [explorerWidth]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("nexagent-chat-w", String(chatWidth));
+    } catch {
+      /* ignore */
+    }
+  }, [chatWidth]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("nexagent-sidebar-conv-px", String(sidebarConvHeightPx));
+    } catch {
+      /* ignore */
+    }
+  }, [sidebarConvHeightPx]);
 
   // Load projects on mount
   useEffect(() => {
@@ -289,6 +334,7 @@ export default function Home() {
 
   const handleNewSession = async () => {
     if (!projectId) return;
+    setChatOpen(true);
     const session = await api.createSession(projectId);
     const entry = { id: session.id, title: session.title || "New Chat", createdAt: session.createdAt, updatedAt: session.updatedAt };
     setSessions((prev) => [entry, ...prev]);
@@ -455,27 +501,48 @@ export default function Home() {
   }
 
   // ─── Workspace ───
+  const bothSidebarListsOpen = sidebarConversationsOpen && sidebarFilesOpen;
+  const sidebarBlock1Flex = sidebarConversationsOpen ? "1 1 0%" : "0 0 auto";
+  const sidebarBlock2Flex = sidebarFilesOpen ? "1 1 0%" : "0 0 auto";
+
+  const canvasModeSwitcher = (
+    <>
+      <button
+        type="button"
+        onClick={() => setCanvasMode("experience")}
+        className={cn(
+          "flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors",
+          canvasMode === "experience"
+            ? "bg-[var(--color-accent)] text-white"
+            : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]"
+        )}
+      >
+        <Play size={12} />
+        {t("workspace.experience")}
+      </button>
+      <button
+        type="button"
+        onClick={() => setCanvasMode("panorama")}
+        className={cn(
+          "flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors",
+          canvasMode === "panorama"
+            ? "bg-[var(--color-accent)] text-white"
+            : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]"
+        )}
+      >
+        <Map size={12} />
+        {t("workspace.panorama")}
+      </button>
+    </>
+  );
+
   return (
     <div className="h-screen flex flex-col bg-[var(--color-bg)]">
       {/* Top bar */}
-      {!isFullscreen && (
       <header className="h-12 flex items-center justify-between px-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] shrink-0">
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setExplorerOpen((o) => !o)}
-            className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
-            title={explorerOpen ? t("workspace.hideExplorer") : t("workspace.showExplorer")}
-          >
-            {explorerOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-          </button>
-          <button
-            onClick={() => setChatOpen((o) => !o)}
-            className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
-            title={chatOpen ? t("workspace.hideChat") : t("workspace.showChat")}
-          >
-            {chatOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-          </button>
-          <button
+            type="button"
             onClick={() => {
               setProjectId(null);
               setSessionId(null);
@@ -503,34 +570,8 @@ export default function Home() {
               {t("chat.agentWorking")}
             </span>
           )}
-          <div className="flex items-center gap-0.5 bg-[var(--color-surface-2)] rounded-md p-0.5">
-            <button
-              onClick={() => setCanvasMode("experience")}
-              className={cn(
-                "flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
-                canvasMode === "experience"
-                  ? "bg-[var(--color-accent)] text-white"
-                  : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
-              )}
-            >
-              <Play size={10} />
-              {t("workspace.experience")}
-            </button>
-            <button
-              onClick={() => setCanvasMode("panorama")}
-              className={cn(
-                "flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
-                canvasMode === "panorama"
-                  ? "bg-[var(--color-accent)] text-white"
-                  : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
-              )}
-            >
-              <Map size={10} />
-              {t("workspace.panorama")}
-            </button>
-          </div>
-          <div className="w-px h-4 bg-[var(--color-border)]" />
           <button
+            type="button"
             onClick={cycleColorScheme}
             className="p-1.5 rounded text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
             title={colorScheme === "dark" ? t("theme.light") : colorScheme === "light" ? t("theme.dark") : t("theme.auto")}
@@ -538,222 +579,340 @@ export default function Home() {
             {colorScheme === "dark" ? <Sun size={14} /> : colorScheme === "light" ? <Moon size={14} /> : <Moon size={14} className="opacity-70" />}
           </button>
           <button
+            type="button"
             onClick={() => setLocale(locale === "zh" ? "en" : "zh")}
             className="px-2 py-1 rounded text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
             title={locale === "zh" ? "English" : "中文"}
           >
             {locale === "zh" ? "EN" : "中文"}
           </button>
-          <button
-            onClick={handleDownload}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors"
-          >
-            <Download size={12} />
-            {t("app.export")}
-          </button>
-          <button
-            onClick={handleShare}
-            className={cn(
-              "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border transition-colors",
-              shareCopied
-                ? "border-green-500 text-green-600"
-                : "border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
-            )}
-          >
-            {shareCopied ? <Check size={12} /> : <Share2 size={12} />}
-            {shareCopied ? t("app.copied") : t("app.share")}
-          </button>
         </div>
       </header>
-      )}
 
       {/* Main workspace: Sidebar | Chat | Preview */}
       <div className="flex-1 flex min-h-0">
-        {/* Left sidebar — collapsible sections */}
-        {!isFullscreen && explorerOpen && (
-        <aside className="w-56 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col overflow-y-auto">
-          {/* ── Agent 对话 ── */}
-          <div>
+        {!explorerOpen && (
+          <div className="w-9 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col items-center justify-end pb-3 pt-2">
             <button
-              onClick={() => setSidebarConversationsOpen((o) => !o)}
-              className="w-full flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors uppercase tracking-wider"
+              type="button"
+              onClick={() => setExplorerOpen(true)}
+              className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+              title={t("workspace.showExplorer")}
             >
-              {sidebarConversationsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-              <MessageCircle size={12} />
-              <span className="flex-1 text-left">{t("sidebar.conversations")}</span>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleNewSession(); }}
-                className="p-0.5 rounded hover:text-[var(--color-accent)] transition-colors"
-                title={t("chat.newChat")}
+              <PanelLeftOpen size={18} />
+            </button>
+          </div>
+        )}
+
+        {explorerOpen && (
+          <>
+            <aside
+              className="shrink-0 bg-[var(--color-surface)] flex flex-col h-full min-h-0 overflow-hidden"
+              style={{ width: explorerWidth }}
+            >
+              <div
+                ref={sidebarStackRef}
+                className="flex-1 min-h-0 flex flex-col overflow-hidden"
               >
-                <Plus size={12} />
-              </button>
-            </button>
-            {sidebarConversationsOpen && (
-              <div className="pb-1">
-                {sessions.length === 0 ? (
-                  <div className="px-3 py-4 text-center text-xs text-[var(--color-text-secondary)] opacity-60">
-                    {t("sidebar.noConversations")}
-                  </div>
-                ) : (
-                  sessions.map((s) => (
-                    <button
-                      key={s.id}
-                      onClick={() => handleSwitchSession(s.id)}
-                      className={cn(
-                        "w-full flex flex-col gap-0.5 px-3 py-2 text-left transition-colors",
-                        "hover:bg-[var(--color-surface-2)]",
-                        s.id === sessionId &&
-                          "bg-[var(--color-surface-2)] border-l-2 border-[var(--color-accent)]"
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "text-xs truncate",
-                          s.id === sessionId
-                            ? "text-[var(--color-accent)] font-medium"
-                            : "text-[var(--color-text)]"
-                        )}
-                      >
-                        {s.title || t("chat.newChat")}
-                      </span>
-                      <span className="text-[10px] text-[var(--color-text-secondary)]">
-                        {relativeTime(s.updatedAt, t)}
-                      </span>
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="border-t border-[var(--color-border)]" />
-
-          {/* ── 文件 ── */}
-          <div>
-            <button
-              onClick={() => setSidebarFilesOpen((o) => !o)}
-              className="w-full flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors uppercase tracking-wider"
-            >
-              {sidebarFilesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-              <Folder size={12} />
-              <span className="flex-1 text-left">{t("sidebar.files")}</span>
-            </button>
-            {sidebarFilesOpen && (
-              <div className="pb-1">
-                {projectFiles.length === 0 ? (
-                  <div className="px-3 py-4 text-center text-xs text-[var(--color-text-secondary)] opacity-60">
-                    {t("sidebar.noFiles")}
-                  </div>
-                ) : (
-                  projectFiles.map((f) => {
-                    const isHtml = f.name.endsWith(".html");
-                    const pageId = isHtml ? f.name.replace(/\.html$/, "") : null;
-                    const isActive = pageId && activePageId === pageId;
-                    const depth = f.path.split("/").length - 1;
-
-                    if (f.type === "directory") {
-                      return (
-                        <div
-                          key={f.path}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[var(--color-text-secondary)]"
-                          style={{ paddingLeft: `${12 + depth * 12}px` }}
+              <div
+                ref={sidebarTopPaneRef}
+                className="flex flex-col min-h-0 overflow-hidden"
+                style={
+                  bothSidebarListsOpen
+                    ? {
+                        flex: "none",
+                        height: sidebarConvHeightPx,
+                        minHeight: 72,
+                      }
+                    : {
+                        flex: sidebarBlock1Flex,
+                        minHeight: sidebarConversationsOpen ? 0 : undefined,
+                      }
+                }
+              >
+                <div className="shrink-0 flex items-stretch min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setSidebarConversationsOpen((o) => !o)}
+                    className="flex-1 flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors uppercase tracking-wider text-left min-w-0"
+                  >
+                    {sidebarConversationsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    <span className="truncate">{t("sidebar.conversations")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleNewSession()}
+                    className="shrink-0 self-center mr-2 p-1 rounded-md hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                    title={t("chat.newChat")}
+                  >
+                    <Plus size={12} />
+                  </button>
+                </div>
+                {sidebarConversationsOpen && (
+                  <div className="flex-1 min-h-0 overflow-y-auto pb-1">
+                    {sessions.length === 0 ? (
+                      <div className="px-3 py-4 text-center text-xs text-[var(--color-text-secondary)] opacity-60">
+                        {t("sidebar.noConversations")}
+                      </div>
+                    ) : (
+                      sessions.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => {
+                            setChatOpen(true);
+                            void handleSwitchSession(s.id);
+                          }}
+                          className={cn(
+                            "w-full flex items-center gap-2 px-3 py-2 text-left transition-colors",
+                            "hover:bg-[var(--color-surface-2)]",
+                            s.id === sessionId &&
+                              "bg-[var(--color-surface-2)] border-l-2 border-[var(--color-accent)]"
+                          )}
                         >
-                          <FolderOpen size={12} className="shrink-0 opacity-50" />
-                          <span className="truncate">{f.name}</span>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <button
-                        key={f.path}
-                        onClick={() => {
-                          if (pageId) {
-                            setActivePageId(pageId);
-                            setCanvasMode("experience");
-                          }
-                        }}
-                        className={cn(
-                          "w-full flex items-center gap-1.5 py-1.5 text-xs text-left transition-colors",
-                          "hover:bg-[var(--color-surface-2)]",
-                          isActive && "bg-[var(--color-surface-2)] text-[var(--color-accent)] border-l-2 border-[var(--color-accent)]",
-                          !isHtml && "opacity-50 cursor-default"
-                        )}
-                        style={{ paddingLeft: `${12 + depth * 12}px` }}
-                        disabled={!isHtml}
-                      >
-                        {isHtml ? (
-                          <FileCode size={12} className={cn("shrink-0", isActive ? "text-[var(--color-accent)]" : "opacity-50")} />
-                        ) : (
-                          <FileText size={12} className="shrink-0 opacity-40" />
-                        )}
-                        <span className="truncate">{f.name}</span>
-                      </button>
-                    );
-                  })
+                          <span
+                            className={cn(
+                              "text-xs truncate min-w-0 flex-1",
+                              s.id === sessionId
+                                ? "text-[var(--color-accent)] font-medium"
+                                : "text-[var(--color-text)]"
+                            )}
+                          >
+                            {s.title || t("chat.newChat")}
+                          </span>
+                          <span className="text-[10px] text-[var(--color-text-secondary)] shrink-0 tabular-nums">
+                            {relativeTime(s.updatedAt, t)}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
-        </aside>
-        )}
 
-        {/* Agent Chat panel — now between sidebar and main */}
-        {!isFullscreen && chatOpen && (
-        <aside className="w-96 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col">
-          <div className="px-3 py-2.5 border-b border-[var(--color-border)] flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full bg-[var(--color-accent)]/20 flex items-center justify-center shrink-0" title={t("app.agent")}>
-              <Bot size={16} className="text-[var(--color-accent)]" />
-            </div>
-            <span className="flex-1 text-sm font-medium truncate">
-              {sessions.find((s) => s.id === sessionId)?.title || t("chat.newChat")}
-            </span>
-            <button
-              onClick={handleNewSession}
-              className="shrink-0 p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
-              title={t("chat.newChat")}
-            >
-              <MessageSquarePlus size={16} />
-            </button>
-          </div>
-          <div className="flex-1 min-h-0">
-            <ChatPanel
-              messages={messages}
-              toolCalls={toolCalls}
-              isLoading={isLoading}
-              onSend={handleSend}
-              onCancel={handleCancel}
-              onRetry={handleRetry}
-              t={t}
-            />
-          </div>
-        </aside>
-        )}
+              {bothSidebarListsOpen && (
+                <TrackedHorizontalResizeHandle
+                  title={t("workspace.resizeSidebarSections")}
+                  stackRef={sidebarStackRef}
+                  minTopPx={72}
+                  minBottomPx={112}
+                  getTopHeight={() =>
+                    sidebarTopPaneRef.current?.getBoundingClientRect().height ??
+                    sidebarConvHeightPx
+                  }
+                  onTopHeightChange={setSidebarConvHeightPx}
+                />
+              )}
 
-        {/* Main: Preview / Panorama */}
-        <main className="flex-1 min-w-0">
-          {canvasMode === "panorama" ? (
-            <Panorama
-              projectId={projectId}
-              activePageId={activePageId}
-              onSelectPage={setActivePageId}
-              onOpenPage={(pageId) => {
-                setActivePageId(pageId);
-                setCanvasMode("experience");
+              <div
+                className={cn(
+                  "flex flex-col min-h-0",
+                  !bothSidebarListsOpen && "border-t border-[var(--color-border)]"
+                )}
+                style={{
+                  flex: bothSidebarListsOpen ? "1 1 0%" : sidebarBlock2Flex,
+                  minHeight: bothSidebarListsOpen || sidebarFilesOpen ? 0 : undefined,
+                }}
+              >
+                <div className="shrink-0 flex items-stretch gap-0.5 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setSidebarFilesOpen((o) => !o)}
+                    className="flex-1 min-w-0 flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors uppercase tracking-wider text-left"
+                  >
+                    {sidebarFilesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    <span className="truncate">{t("sidebar.files")}</span>
+                  </button>
+                  <div className="flex items-center shrink-0 pr-1.5 gap-0.5">
+                    <button
+                      type="button"
+                      onClick={handleDownload}
+                      className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                      title={t("app.export")}
+                    >
+                      <Download size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleShare()}
+                      className={cn(
+                        "p-1.5 rounded-md transition-colors",
+                        shareCopied
+                          ? "text-green-600 bg-green-500/10"
+                          : "text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
+                      )}
+                      title={shareCopied ? t("app.copied") : t("app.share")}
+                    >
+                      {shareCopied ? <Check size={15} /> : <Share2 size={15} />}
+                    </button>
+                  </div>
+                </div>
+                {sidebarFilesOpen && (
+                  <div className="flex-1 min-h-0 overflow-y-auto pb-1">
+                    {projectFiles.length === 0 ? (
+                      <div className="px-3 py-4 text-center text-xs text-[var(--color-text-secondary)] opacity-60">
+                        {t("sidebar.noFiles")}
+                      </div>
+                    ) : (
+                      projectFiles.map((f) => {
+                        const isHtml = f.name.endsWith(".html");
+                        const pageId = isHtml ? f.name.replace(/\.html$/, "") : null;
+                        const isActive = pageId && activePageId === pageId;
+                        const depth = f.path.split("/").length - 1;
+
+                        if (f.type === "directory") {
+                          return (
+                            <div
+                              key={f.path}
+                              className="flex items-center px-3 py-1.5 text-xs text-[var(--color-text-secondary)]"
+                              style={{ paddingLeft: `${12 + depth * 12}px` }}
+                            >
+                              <span className="truncate">{f.name}</span>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <button
+                            key={f.path}
+                            type="button"
+                            onClick={() => {
+                              if (pageId) {
+                                setActivePageId(pageId);
+                                setCanvasMode("experience");
+                              }
+                            }}
+                            className={cn(
+                              "w-full flex items-center py-1.5 text-xs text-left transition-colors",
+                              "hover:bg-[var(--color-surface-2)]",
+                              isActive &&
+                                "bg-[var(--color-surface-2)] text-[var(--color-accent)] border-l-2 border-[var(--color-accent)]",
+                              !isHtml && "opacity-50 cursor-default"
+                            )}
+                            style={{ paddingLeft: `${12 + depth * 12}px` }}
+                            disabled={!isHtml}
+                          >
+                            <span className="truncate">{f.name}</span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+              </div>
+
+              <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-t border-[var(--color-border)] bg-[var(--color-surface)]">
+                <button
+                  type="button"
+                  className="w-8 h-8 rounded-full bg-[var(--color-accent)]/15 flex items-center justify-center shrink-0 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/25 transition-colors"
+                  title={projectName}
+                  aria-label={projectName}
+                >
+                  <NextLogo className="w-[15px] h-[15px]" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExplorerOpen(false)}
+                  className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors shrink-0"
+                  title={t("workspace.hideExplorer")}
+                >
+                  <PanelLeftClose size={18} />
+                </button>
+              </div>
+            </aside>
+            <VerticalPanelResizeHandle
+              title={t("workspace.resizeColumns")}
+              onResizeDelta={(dx) => {
+                setExplorerWidth((w) => clampLayout(w + dx, 176, 380));
               }}
             />
-          ) : (
-            <PreviewPanel
-              projectId={projectId}
-              pageId={activePageId}
-              refreshKey={previewRefresh}
-              onNavigate={handleNavigate}
-              pages={pages}
-              isFullscreen={isFullscreen}
-              onToggleFullscreen={() => setIsFullscreen((f) => !f)}
+          </>
+        )}
+
+        {chatOpen && (
+          <>
+            <aside
+              className="shrink-0 bg-[var(--color-surface)] flex flex-col min-h-0 overflow-hidden"
+              style={{ width: chatWidth }}
+            >
+              <div className="px-3 py-2.5 border-b border-[var(--color-border)] flex items-center gap-2 shrink-0">
+                <div
+                  className="w-7 h-7 rounded-full bg-[var(--color-accent)]/20 flex items-center justify-center shrink-0"
+                  title={t("app.agent")}
+                >
+                  <Bot size={16} className="text-[var(--color-accent)]" />
+                </div>
+                <span className="flex-1 text-sm font-medium truncate min-w-0">
+                  {sessions.find((s) => s.id === sessionId)?.title || t("chat.newChat")}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void handleNewSession()}
+                  className="shrink-0 p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                  title={t("chat.newChat")}
+                >
+                  <MessageSquarePlus size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChatOpen(false)}
+                  className="shrink-0 p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+                  title={t("workspace.closeAgent")}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="flex-1 min-h-0">
+                <ChatPanel
+                  messages={messages}
+                  toolCalls={toolCalls}
+                  isLoading={isLoading}
+                  onSend={handleSend}
+                  onCancel={handleCancel}
+                  onRetry={handleRetry}
+                  t={t}
+                />
+              </div>
+            </aside>
+            <VerticalPanelResizeHandle
+              title={t("workspace.resizeColumns")}
+              onResizeDelta={(dx) => {
+                setChatWidth((w) => clampLayout(w + dx, 280, 640));
+              }}
             />
+          </>
+        )}
+
+        {/* Main: canvas toolbar + Preview / Panorama */}
+        <main className="flex flex-col flex-1 min-w-0 min-h-0">
+          {canvasMode === "panorama" && (
+            <div className="shrink-0 flex items-center justify-end gap-0.5 px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
+              {canvasModeSwitcher}
+            </div>
           )}
+          <div className="flex-1 min-h-0 min-w-0">
+            {canvasMode === "panorama" ? (
+              <Panorama
+                projectId={projectId}
+                activePageId={activePageId}
+                onSelectPage={setActivePageId}
+                onOpenPage={(pageId) => {
+                  setActivePageId(pageId);
+                  setCanvasMode("experience");
+                }}
+              />
+            ) : (
+              <PreviewPanel
+                projectId={projectId}
+                pageId={activePageId}
+                refreshKey={previewRefresh}
+                onNavigate={handleNavigate}
+                pages={pages}
+                trailingToolbar={canvasModeSwitcher}
+              />
+            )}
+          </div>
         </main>
       </div>
     </div>
